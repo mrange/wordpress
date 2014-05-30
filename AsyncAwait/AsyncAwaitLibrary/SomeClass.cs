@@ -28,7 +28,7 @@ namespace AsyncAwaitLibrary
                 Thread.CurrentThread.ManagedThreadId));
         }
 
-        public static async Task<string> ReadSomeTextAsync(string fileName)
+        public static async Task<string> ReadSomeTextAsync(string fileName, bool continueOnCapturedContext)
         {
             TraceThreadId ();
 
@@ -41,7 +41,7 @@ namespace AsyncAwaitLibrary
             {
                 using (var sr = new StreamReader(fileName))
                 {
-                    var result = await sr.ReadToEndAsync().ConfigureAwait (continueOnCapturedContext: false);
+                    var result = await sr.ReadToEndAsync().ConfigureAwait (continueOnCapturedContext);
                     return result;
                 }
             }

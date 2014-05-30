@@ -50,10 +50,9 @@
     <None Include="App.config" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\AsyncAwaitLibrary\AsyncAwaitLibrary.csproj">
-      <Project>{b44032d5-a929-4b14-b430-aa17e736193a}</Project>
-      <Name>AsyncAwaitLibrary</Name>
-    </ProjectReference>
+    <Content Include="SomeText.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
