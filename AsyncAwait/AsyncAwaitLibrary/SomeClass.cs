@@ -36,7 +36,7 @@ namespace AsyncAwaitLibrary
             {
                 using (var sr = new StreamReader(fileName))
                 {
-                    var result = await sr.ReadToEndAsync().ConfigureAwait (continueOnCapturedContext: false);
+                    var result = await sr.ReadToEndAsync().ConfigureAwait (continueOnCapturedContext: true);
                     return result;
                 }
             }
