@@ -13,13 +13,16 @@
 using AsyncAwaitLibrary;
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Windows.Threading;
 
 namespace AsyncAwait
 {
     static class Program
     {
-        static void ItWorks ()
+        static void ReadText ()
         {
             SomeClass.TraceThreadId ();
 
@@ -58,15 +61,35 @@ namespace AsyncAwait
             SomeClass.TraceThreadId ();
         }
 
+        [STAThread]
         static void Main(string[] args)
         {
             Environment.CurrentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+/*
+            SynchronizationContext.SetSynchronizationContext (null);
+            ReadText ();
 
-            ItWorks ();
+            using (var context = new WindowsFormsSynchronizationContext ())
+            {
+                SynchronizationContext.SetSynchronizationContext (context);
+                ReadText ();
+            }
+
+            using (var context = new WindowsFormsSynchronizationContext ())
+            {
+                SynchronizationContext.SetSynchronizationContext (context);
+                ReadText ();
+            }
+*/
+            {
+                var context     = new DispatcherSynchronizationContext ();
+                SynchronizationContext.SetSynchronizationContext (context);
+                ReadText ();
+            }
+
+            SynchronizationContext.SetSynchronizationContext (null);
 
             RaceCondition ();
-
-
 
             Console.ReadKey ();
         }

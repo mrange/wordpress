@@ -32,6 +32,11 @@ namespace AsyncAwaitLibrary
         {
             TraceThreadId ();
 
+            var context = SynchronizationContext.Current;
+            Trace.WriteLine (string.Format (
+                "ReadSomeTextAsync, SynchronizationContext: {0}"        , 
+                context != null ? context.GetType ().FullName : "Null"  ));
+
             try
             {
                 using (var sr = new StreamReader(fileName))
