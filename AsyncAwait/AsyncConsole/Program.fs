@@ -6,62 +6,96 @@ open System.Threading
 open System.Windows.Forms
 open System.Windows.Threading
 
-let traceThreadId (caller : string) =
-    printfn "%s, thread id: %d" caller Thread.CurrentThread.ManagedThreadId
+let info (msg : string) =
+    printfn "INFO  : %s" msg
 
-let readSomeTextAsync (fileName : string) =
+let error (msg : string) =
+    printfn "ERROR : %s" msg
+
+let mutable readingFiles = 0;
+
+let readingFilesAsync (fileName : string) =
     async {
-        let trace () = traceThreadId "readSomeTextAsync"
-        trace ()
         
-        let ctx = SynchronizationContext.Current
-        let desc= if ctx <> null then ctx.GetType().FullName else "Null"
-        printfn "ReadSomeTextAsync, SynchronizationContext: %s" desc 
+        let before  = Thread.CurrentThread.ManagedThreadId
 
-        try
-            use sr = new StreamReader(fileName)
+        readingFiles <- readingFiles + 1
 
-            let! text = Async.AwaitTask <| sr.ReadToEndAsync ()
+        use sr = new StreamReader(fileName)
+        let! text = Async.AwaitTask <| sr.ReadToEndAsync ()
 
-            return text
-        finally
-            trace ()
+        readingFiles <- readingFiles - 1
+
+        let after   = Thread.CurrentThread.ManagedThreadId
+        
+        if before <> after then
+            error "Race condition detected"
     }
 
-let readSomeText () =
-    let trace () = traceThreadId "readSomeTextAsync"
-    trace ()
+let testCase (contextCreator : unit -> SynchronizationContext) (continueOnCapturedContext : bool) =
 
-    Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
+    let previous    = SynchronizationContext.Current
+    let context     = contextCreator ()
 
-    let readTask    = Async.StartAsTask <| readSomeTextAsync "SomeText.txt"
-    let text        = readTask.Result
+    SynchronizationContext.SetSynchronizationContext context
 
-    printfn "Read %d characters" text.Length
+    let description = if context <> null then context.GetType().Name else "Null"
 
-    trace ()
+    info <| 
+        sprintf 
+            "ContinueOnCapturedContext=%s and context=%s" 
+            (continueOnCapturedContext.ToString())
+            description 
+
+    try
+        let task        = Async.StartAsTask <| readingFilesAsync "SomeText.txt"
+        let test        = task.Result
+        ()
+    finally
+        try
+            match context :> obj with
+            | :? IDisposable as d -> d.Dispose()
+            | _ -> ()
+        with
+            e -> info <| sprintf "Caught exception during dispose: %s" e.Message
+
+        SynchronizationContext.SetSynchronizationContext null
+
+let runTestCase (contextCreator : unit -> SynchronizationContext) (continueOnCapturedContext : bool) =
+    let threadStart     = ThreadStart(fun () -> testCase contextCreator continueOnCapturedContext)
+    let thread          = Thread (threadStart)
+    thread.Name         <-"Test case"
+    thread.IsBackground <- true
+    thread.SetApartmentState ApartmentState.STA
+
+    thread.Start ()
+
+    let completed = thread.Join(TimeSpan.FromSeconds 1.)
+    if not completed then
+        error "Detected dead-lock"
+        thread.Interrupt ()
 
 
 [<EntryPoint>]
 [<STAThread>]
 let main argv = 
+    Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 
-    printfn "Use default synchronization context"
-    SynchronizationContext.SetSynchronizationContext null
-    readSomeText ()
+    let testCases : (bool*(unit->SynchronizationContext)) list = 
+        [
+            true    , fun () -> null
+            false   , fun () -> null
+            true    , fun () -> new WindowsFormsSynchronizationContext () :> SynchronizationContext
+            false   , fun () -> new WindowsFormsSynchronizationContext () :> SynchronizationContext
+            true    , fun () -> new DispatcherSynchronizationContext () :> SynchronizationContext
+            false   , fun () -> new DispatcherSynchronizationContext () :> SynchronizationContext
+        ]
 
-    printfn "Use windows form synchronization context"
-    use context = new WindowsFormsSynchronizationContext ()
-    SynchronizationContext.SetSynchronizationContext <| context 
-    readSomeText ()
+    info <| "Starting test run..."
 
-    printfn "Use dispatcher synchronization context"
-    let context     = DispatcherSynchronizationContext ()
-    SynchronizationContext.SetSynchronizationContext <| context 
-    readSomeText ()
+    for continueOnCapturedContext,contextCreator in testCases do
+        runTestCase contextCreator continueOnCapturedContext
 
-    SynchronizationContext.SetSynchronizationContext null
-
-    ignore <| Console.ReadKey ()                    
+    info <| "Test run done"
 
     0

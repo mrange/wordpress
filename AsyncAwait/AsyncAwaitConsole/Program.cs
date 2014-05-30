@@ -47,8 +47,6 @@ namespace AsyncAwait
             RunTestCase (dispatcherContext  , continueOnCapturedContext:false   );
 
             Info ("Test run done");
-
-            Console.ReadKey ();
         }
 
         static void RunTestCase (SynchronizationContextDelegate contextCreator, bool continueOnCapturedContext)
@@ -120,8 +118,6 @@ namespace AsyncAwait
 
         static async Task<string> ReadStreamAsync (string fileName, bool continueOnCapturedContext)
         {
-            var context     = SynchronizationContext.Current;
-
             using (var sr = new StreamReader(fileName))
             {
                 var result = await sr.ReadToEndAsync().ConfigureAwait (continueOnCapturedContext);
