@@ -14,13 +14,8 @@
 <#@ import      namespace   = "System.Collections.Generic"      #>
 <#@ import      namespace   = "System.Linq"                     #>
 
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
 <#
+    // Defining the Model of *what* we want to generate
     ClassDefs = new ClassDefinition[]
     {
         new ClassDefinition ("Order")
@@ -51,6 +46,7 @@ using System.Threading.Tasks;
 namespace <#=Namespace#>
 {
 <#
+    // Defining the template which describes *how* the model is transformed into code
     foreach (var classDef in ClassDefs)
     {
 #>
