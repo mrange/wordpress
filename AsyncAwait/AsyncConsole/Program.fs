@@ -1,41 +1,132 @@
-﻿
+﻿// ----------------------------------------------------------------------------------------------
+// Copyright (c) Mårten Rånge.
+// ----------------------------------------------------------------------------------------------
+// This source code is subject to terms and conditions of the Microsoft Public License. A 
+// copy of the license can be found in the License.html file at the root of this distribution. 
+// If you cannot locate the  Microsoft Public License, please send an email to 
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+//  by the terms of the Microsoft Public License.
+// ----------------------------------------------------------------------------------------------
+// You must not remove this notice, or any other, from this software.
+// ----------------------------------------------------------------------------------------------
+
 open System
 open System.Diagnostics
 open System.IO
 open System.Threading
+open System.Windows.Forms
+open System.Windows.Threading
 
-let traceThreadId (caller : string) =
-    Trace.WriteLine <| sprintf "%s, thread id: %d" caller Thread.CurrentThread.ManagedThreadId
+let info (msg : string) =
+    printfn "INFO  : %s" msg
 
-let readSomeTextAsync (fileName : string) =
+let error (msg : string) =
+    printfn "ERROR : %s" msg
+
+let dispose o = 
+    try
+        match o :> obj with
+        | :? IDisposable as d -> d.Dispose()
+        | _ -> ()
+    with
+        e -> info <| sprintf "Caught exception during dispose: %s" e.Message
+
+
+let mutable readingFiles = 0;
+
+let readingFilesAsync (description : string) (fileName : string) =
     async {
-        let trace () = traceThreadId "readSomeTextAsync"
-        trace ()
+        let before  = Thread.CurrentThread.ManagedThreadId
 
-        try
-            use sr = new StreamReader(fileName)
+        readingFiles <- readingFiles + 1
 
-            let! text = Async.AwaitTask <| sr.ReadToEndAsync ()
+        use sr = new StreamReader(fileName)
 
-            return text
-        finally
-            trace ()
+        let length  = int sr.BaseStream.Length
+        let bytes   = Array.create length <| byte 0
+
+        let! text = Async.AwaitTask <| sr.ReadToEndAsync ()
+//        let! result = Async.AwaitIAsyncResult <| sr.BaseStream.BeginRead(bytes, 0, length, null, null)
+
+        readingFiles <- readingFiles - 1
+
+        let after   = Thread.CurrentThread.ManagedThreadId
+        
+        if before <> after then
+            error <| sprintf "%s - Race condition detected" description
     }
 
-[<EntryPoint>]
-let main argv = 
-    let trace () = traceThreadId "readSomeTextAsync"
-    trace ()
+let testCase 
+    (description    : string                        ) 
+    (contextCreator : unit -> SynchronizationContext) 
+    (runner         : Async<unit> -> unit           ) =
 
+    let previous    = SynchronizationContext.Current
+    let context     = contextCreator ()
+
+    SynchronizationContext.SetSynchronizationContext context
+
+    let myTask = 
+        async {
+            try
+                let! test = readingFilesAsync description "SomeText.txt"
+                return ()
+            finally
+                SynchronizationContext.SetSynchronizationContext null
+                dispose context
+
+            }
+    runner myTask
+    ()
+
+let runTestCase 
+    (description    : string                        ) 
+    (contextCreator : unit -> SynchronizationContext) 
+    (runner         : Async<unit> -> unit           ) =
+    let threadStart     = ThreadStart(fun () -> testCase description contextCreator runner)
+    let thread          = Thread (threadStart)
+    thread.Name         <-sprintf "Test case - %s" <| description
+    thread.IsBackground <- false
+    thread.SetApartmentState ApartmentState.STA
+
+    thread.Start ()
+
+    let completed = thread.Join(TimeSpan.FromSeconds 1.)
+    if not completed then
+        error <| sprintf "%s - Detected dead-lock" description
+        thread.Interrupt ()
+
+
+[<EntryPoint>]
+[<STAThread>]
+let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 
-    let readTask    = Async.StartAsTask <| readSomeTextAsync "SomeText.txt"
-    let text        = readTask.Result
+    let synchronizationContexts : (string*(unit->SynchronizationContext)) list = 
+        [
+            "Default"       , fun () -> null
+            "WindowsForms"  , fun () -> upcast new WindowsFormsSynchronizationContext () 
+            "Dispatcher"    , fun () -> upcast new DispatcherSynchronizationContext () 
+        ]
 
-    printfn "Read %d characters" text.Length
+    let asyncRunners : (string*(Async<unit>->unit)) list = 
+        [
+            "SameThread"    , fun a -> Async.StartImmediate a
+            "ThreadPool"    , fun a -> Async.Start a
+            "Task"          , fun a -> ignore <| Async.StartAsTask a
+        ]
 
-    trace ()
+    let runs = 5
 
-    ignore <| Console.ReadKey ()                    
+    info <| "Starting test run..."
+
+    for c, contextCreator in synchronizationContexts do
+        for r, runner in asyncRunners do
+            let description = sprintf "%s,%s" c r
+            info <| sprintf "Test case %s - doing %d runs" description runs
+            for i in 1..runs do
+                runTestCase description contextCreator runner
+
+    info <| "Test run done"
 
     0
