@@ -1,0 +1,141 @@
+﻿// ----------------------------------------------------------------------------------------------
+// Copyright (c) Mårten Rånge.
+// ----------------------------------------------------------------------------------------------
+// This source code is subject to terms and conditions of the Microsoft Public License. A 
+// copy of the license can be found in the License.html file at the root of this distribution. 
+// If you cannot locate the  Microsoft Public License, please send an email to 
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+//  by the terms of the Microsoft Public License.
+// ----------------------------------------------------------------------------------------------
+// You must not remove this notice, or any other, from this software.
+// ----------------------------------------------------------------------------------------------
+
+<#@ assembly    name        = "System.Core"                     #>
+<#@ import      namespace   = "System.Collections.Generic"      #>
+<#@ import      namespace   = "System.Linq"                     #>
+
+<#
+    // Defining the Model of *what* we want to generate
+    ClassDefs = new ClassDefinition[]
+    {
+        new ClassDefinition ("Order")
+        {
+            new PropertyDefinition ("long"              , "Id"              ),      
+            new PropertyDefinition ("DeliveryAddress"   , "DeliverAddress"  ),      
+            new PropertyDefinition ("OrderRow[]"        , "Rows"            ),      
+        },
+        new ClassDefinition ("DeliveryAddress")
+        {
+            new PropertyDefinition ("long"          , "Id"          ),      
+            new PropertyDefinition ("string"        , "Name"        ),      
+            new PropertyDefinition ("string"        , "Address"     ),      
+            new PropertyDefinition ("string"        , "City"        ),      
+            new PropertyDefinition ("string"        , "Zip"         ),      
+            new PropertyDefinition ("string"        , "Country"     ),      
+        },
+        new ClassDefinition ("OrderRow")
+        {
+            new PropertyDefinition ("long"          , "Id"          ),      
+            new PropertyDefinition ("string"        , "Description" ),      
+            new PropertyDefinition ("decimal"       , "FullAmount"  ),      
+            new PropertyDefinition ("decimal"       , "TaxAmount"   ),      
+        },
+    };
+#>
+
+namespace <#=Namespace#>
+{
+<#
+    // Defining the template which describes *how* the model is transformed into code
+    foreach (var classDef in ClassDefs)
+    {
+#>
+    // ------------------------------------------------------------------------
+    partial class <#=classDef.Name#> : BaseViewModel
+    {
+
+        // --------------------------------------------------------------------
+        // Properties
+<#
+    foreach (var propertyDef in classDef)
+    {
+#>
+        // --------------------------------------------------------------------
+        <#=propertyDef.Type#> _<#=propertyDef.Name#>;
+        public <#=propertyDef.Type#> <#=propertyDef.Name#>
+        {
+            get { return _<#=propertyDef.Name#>; }
+            set
+            {
+                _<#=propertyDef.Name#> = value;
+                RaisePropertyChanged ("<#=propertyDef.Name#>");
+            }
+        }
+        // --------------------------------------------------------------------
+
+<#
+    }
+#>
+
+    }
+    // ------------------------------------------------------------------------
+
+<#
+    }
+#>
+}
+
+<#+
+    const  string NoName    = "<NoName>";
+    const  string NoType    = "<NoType>";
+
+    static string Namespace = "MetaProgramming";
+
+    static ClassDefinition[] ClassDefs = new ClassDefinition[0];
+
+    class ClassDefinition : IEnumerable<PropertyDefinition>
+    {
+        public readonly string Name;
+
+        readonly List<PropertyDefinition> m_properties = new List<PropertyDefinition> ();
+
+        public ClassDefinition (string name)
+        {
+            Name = name ?? NoName;
+        }
+
+        public void Add (PropertyDefinition pd)
+        {
+            if (pd == null) return;
+
+            m_properties.Add (pd);
+        }
+
+        public IEnumerator<PropertyDefinition> GetEnumerator ()
+        {
+            foreach (var pd in m_properties)
+            {
+                yield return pd;
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator ()
+        {
+            return GetEnumerator ();
+        }
+
+    }
+
+    class PropertyDefinition
+    {
+        public readonly string Type;
+        public readonly string Name;
+
+        public PropertyDefinition (string type, string name)
+        {
+            Type = type ?? NoType;
+            Name = name ?? NoName;
+        }
+    }
+
+#>
