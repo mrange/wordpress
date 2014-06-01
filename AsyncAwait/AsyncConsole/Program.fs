@@ -14,6 +14,7 @@ open System
 open System.Diagnostics
 open System.IO
 open System.Threading
+open System.Threading.Tasks
 open System.Windows.Forms
 open System.Windows.Threading
 
@@ -34,6 +35,18 @@ let dispose o =
 
 let mutable readingFiles = 0;
 
+let AwaitTask2 (task : Task<'T>) : Async<'T> =
+    let awaitable   = task.ConfigureAwait(false) // Ignore the SynchronizationContext
+    let awaiter     = awaitable.GetAwaiter()
+    if awaiter.IsCompleted then
+        async.Return <| awaiter.GetResult()
+    else
+        Async.FromContinuations <| fun (continuation, _, _) -> 
+            awaiter.OnCompleted <| Action(fun () -> 
+                let result = awaiter.GetResult()
+                continuation result
+                )
+
 let readingFilesAsync (description : string) (fileName : string) =
     async {
         let before  = Thread.CurrentThread.ManagedThreadId
@@ -45,15 +58,18 @@ let readingFilesAsync (description : string) (fileName : string) =
         let length  = int sr.BaseStream.Length
         let bytes   = Array.create length <| byte 0
 
-        let! text = Async.AwaitTask <| sr.ReadToEndAsync ()
+        let! text = Async.AwaitTask <| sr.ReadToEndAsync()
+//        let! text = AwaitTask2 <| sr.ReadToEndAsync()
 //        let! result = Async.AwaitIAsyncResult <| sr.BaseStream.BeginRead(bytes, 0, length, null, null)
 
         readingFiles <- readingFiles - 1
 
+        do! Async.SwitchToContext SynchronizationContext.Current
+
         let after   = Thread.CurrentThread.ManagedThreadId
         
         if before <> after then
-            error <| sprintf "%s - Race condition detected" description
+            info <| sprintf "%s - Race condition detected" description
     }
 
 let testCase 
