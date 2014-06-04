@@ -57,6 +57,9 @@
     <Compile Include="Async2.fs" />
     <Compile Include="Program.fs" />
     <None Include="App.config" />
+    <Content Include="SomeOtherText.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="SomeText.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

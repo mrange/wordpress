@@ -16,9 +16,9 @@ open System.Threading
 
 open mrange
 
-// TODO: 
-// Start child task
-// 
+type DisposeTest(name : string) =
+    interface IDisposable with
+        member x.Dispose () = printfn "Disposed: %s" name
 
 let readText (fileName : string) =
     async2 {
@@ -30,12 +30,12 @@ let readText (fileName : string) =
 let composite =
     async2 {
         let! x = Async2.StartChild <| readText "SomeText.txt" 
-        let! y = Async2.StartChild <| readText "SomeText.txt" 
+        let! y = Async2.StartChild <| readText "SomeOtherText.txt" 
 
         let! xx = x
         let! yy = y
 
-        return xx + yy
+        return xx + " " + yy
     }
 
 
@@ -47,7 +47,7 @@ let main argv =
     let comp (v : 'T)   : unit = 
         printfn "Operation completed: %A" v
     let exe (ex : exn)  : unit = 
-        printfn "Exception was raised: %A" ex
+        printfn "Exception was raised: %A" ex.Message
     let canc (cr : CancelReason) : unit = 
         printfn "Operation cancelled: %A" cr
 
