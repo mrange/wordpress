@@ -16,23 +16,33 @@ open System.Threading
 
 open mrange
 
+// TODO: 
+// Start child task
+// 
 
-let createStream =
+let readText (fileName : string) =
     async2 {
-        return new StreamReader ("SomeText.txt")
+        use stream = new StreamReader (fileName)
+        let! text = Async2.AwaitTask <| stream.ReadToEndAsync ()
+        return text
     }
 
-let simple =
+let composite =
     async2 {
-        use! x = createStream
-        use mtx = new Mutex ()
-        do! Async2.AwaitWaitHandle mtx
-        return 1
+        let! x = Async2.StartChild <| readText "SomeText.txt" 
+        let! y = Async2.StartChild <| readText "SomeText.txt" 
+
+        let! xx = x
+        let! yy = y
+
+        return xx + yy
     }
+
 
 [<EntryPoint>]
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
+
 
     let comp (v : 'T)   : unit = 
         printfn "Operation completed: %A" v
@@ -41,5 +51,5 @@ let main argv =
     let canc (cr : CancelReason) : unit = 
         printfn "Operation cancelled: %A" cr
 
-    Async2.Start simple comp exe canc
+    Async2.Start composite comp exe canc
     0
