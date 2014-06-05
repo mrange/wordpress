@@ -14,13 +14,14 @@ namespace mrange
 
 open System
 open System.Collections.Generic
+open System.Diagnostics
 open System.IO
 open System.Threading
 open System.Threading.Tasks
 
 [<AutoOpen>]
 module Utils =
-    let TraceException (ex : #exn) = ()
+    let TraceException (ex : #exn) = Trace.WriteLine <| sprintf "Async2 caught exception: %A" ex
 
     let Dispose (d : #IDisposable) : unit = 
         try
@@ -110,17 +111,6 @@ type Async2Context(threadId : int, threadName : string) =
                    reraise () 
 
 type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->unit
-
-module Async2Module = 
-
-    type Stream with
-    
-        member x.ReadAsync2 (buffer : byte[], offset : int, count : int) : Async2<int> = fun (ctx, comp, exe, canc) ->
-            let mutable overlapped = NativeOverlapped ()
-            overlapped.OffsetHigh   <- 0
-            overlapped.OffsetLow    <- offset
-
-            ()
 
 module Async2 =
 
