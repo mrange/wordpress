@@ -116,10 +116,12 @@ module Async2 =
 
     // Extended
 
+    // Used to create Async2 workflow from continuation functions
     let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) -> 
 //        ctx.CheckCallingThread ()
         f ctx comp exe canc
 
+    // Awaits a WaitHandle, if await is successful computes a value 
     let inline AwaitWaitHandleAndDo (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             let signal (id, cro) = 
@@ -129,17 +131,21 @@ module Async2 =
                 | _         -> comp <| a ()
             ctx.RegisterWaitHandle waitHandle signal
 
+    // Awaits a WaitHandle 
     let AwaitWaitHandle (waitHandle : WaitHandle) : Async2<unit> = 
         AwaitWaitHandleAndDo waitHandle <| fun () -> ()
 
+    // Awaits a task
     let AwaitTask (task : Task<'T>) : Async2<'T> = 
         let ar : IAsyncResult = upcast task
         AwaitWaitHandleAndDo ar.AsyncWaitHandle <| fun () -> task.Result
 
+    // Cancels a workflow
     let Cancel (state : obj) : Async2<unit> = 
         FromContinuations <| fun ctx comp exe canc ->
             canc <| UserCancelled state
 
+    // Starts an Async2 workflow
     let Start (f : Async2<'T>) comp exe canc : unit =  
         let ctx = Async2Context.Context
         try
@@ -148,6 +154,7 @@ module Async2 =
         with
         | e -> exe e
     
+    // Starts an Async2 workflow inside an Async2 workflow, note that the child workflow will share the same thread
     let StartChild (f : Async2<'T>) : Async2<Async2<'T>> = 
         FromContinuations <| fun ctx comp exe canc ->
             let continuation= ref None
@@ -171,6 +178,7 @@ module Async2 =
 
     // Computation expression support
 
+    // Bind is invoked by let!, do!
     let Bind (f : Async2<'T>) (s : 'T->Async2<'U>) : Async2<'U> = 
         FromContinuations <| fun ctx comp exe canc ->
             let fcomp (v : 'T) : unit = 
@@ -178,50 +186,57 @@ module Async2 =
                 ss (ctx, comp, exe, canc)
             f (ctx, fcomp, exe, canc)
 
+    // Combine is used when sequencing in computation expressions
     let Combine (f : Async2<'T>) (s : Async2<'T>) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             let fcomp (v : 'T) : unit = 
                 s (ctx, comp, exe, canc)
             f (ctx, fcomp, exe, canc)
 
+    // Wraps a computation expression as a function
     let Delay func : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             func () (ctx, comp, exe, canc)
 
+    // For is invoked by for .. do
     let For (vs : seq<'T>) (b : 'T->Async2<'U>) : Async2<'U> = 
         FromContinuations <| fun ctx comp exe canc ->
+            let c = ref true
             let e = vs.GetEnumerator ()
             let bexe (ex : exn)  : unit = 
+                c := false
                 Dispose e
                 exe ex
             let bcanc (cr : CancelReason) : unit = 
+                c := false
                 Dispose e
                 canc cr
-            let rec bcomp (v : 'U)  : unit = 
-                Dispose e
-                if e.MoveNext () then
+            let rec bcomp (v : 'U)  : unit =
+                if !c && e.MoveNext () then
                     let bb = b e.Current
                     bb (ctx, bcomp, bexe, bcanc)
-                else
+                else if !c then
                     Dispose e
                     comp v
-            if e.MoveNext () then
-                let bb = b e.Current
-                bb (ctx, bcomp, bexe, bcanc)
-            else
-                Dispose e
-                comp Unchecked.defaultof<'U>
+            try 
+                bcomp Unchecked.defaultof<'U>
+            with 
+            | ex -> bexe ex
 
+    // Return is invoked by return
     let Return (v : 'T) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             comp v
 
+    // ReturnFrom is invoked by return from
     let ReturnFrom v : Async2<'T> = v
 
+    // Runs a workflow
     let Run (f : Async2<'T>) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             f (ctx, comp, exe, canc)
 
+    // Invoked by try..finally
     let TryFinally (b : Async2<'T>) (f : unit->unit) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             let bcomp (v : 'T)  : unit = 
@@ -238,6 +253,7 @@ module Async2 =
             with
             | e -> bexe e
 
+    // Invoked by try..with
     let TryWith (f : Async2<'T>) (e : exn->Async2<'T>) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             let fexe (ex : exn)  : unit = 
@@ -249,6 +265,7 @@ module Async2 =
             | e -> fexe e
 
 
+    // Invoked by use
     let Using<'T, 'U when 'T :> IDisposable> (v : 'T) (f : 'T->Async2<'U>) : Async2<'U> = 
         FromContinuations <| fun ctx comp exe canc ->
             let fcomp (u : 'U)  : unit = 
@@ -266,24 +283,32 @@ module Async2 =
             with
             | e -> fexe e
 
+    // Invoked by while..do
     let While (t : unit->bool) (b : Async2<'T>) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
-            let rec fcomp (v : 'T)  : unit = 
-                if t () then
-                    b (ctx, fcomp, exe, canc)
-                else
-                    comp v        
-            if t () then
-                b (ctx, fcomp, exe, canc)
-            else
-                comp Unchecked.defaultof<'T>
+            let c = ref true
+            let bexe (ex : exn)  : unit = 
+                c := false
+                exe ex
+            let bcanc (cr : CancelReason) : unit = 
+                c := false
+                canc cr
+            let rec bcomp (v : 'T)  : unit = 
+                if !c && t () then
+                    b (ctx, bcomp, bexe, bcanc)
+                else if !c then
+                    comp v
+            bcomp Unchecked.defaultof<'T>        
 
+    // Invoked by yield
     let Yield (v : 'T) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             comp v
 
+    // Invoked by yield! 
     let YieldFrom v : Async2<'T> = v
 
+    // Invoked by empty else branches
     let Zero () : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             comp Unchecked.defaultof<'T>

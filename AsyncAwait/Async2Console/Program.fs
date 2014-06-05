@@ -16,6 +16,10 @@ open System.Threading
 
 open mrange
 
+// TODO: 
+// Investigate exception handling
+// For/While not working properly
+
 type DisposeTest(name : string) =
     interface IDisposable with
         member x.Dispose () = printfn "Disposed: %s" name
@@ -38,6 +42,13 @@ let composite =
         return xx + " " + yy
     }
 
+let forExpression =
+    async2 {
+        for i in 0..9 do
+            let! zz = composite
+            return zz
+        return ""
+    }
 
 [<EntryPoint>]
 let main argv = 
