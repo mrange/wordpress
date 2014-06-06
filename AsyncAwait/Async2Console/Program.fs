@@ -54,7 +54,6 @@ let forExpression =
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 
-
     let comp (v : 'T)   : unit = 
         printfn "Operation completed: %A" v
     let exe (ex : exn)  : unit = 

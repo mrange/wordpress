@@ -32,7 +32,8 @@ module Utils =
 type CancelReason =
     | ApplicationShutDown
     | ThreadShutDown
-    | TokenCancelled
+    | UnrecoverableErrorDetected
+    | TokenCancelled of CancellationToken
     | UserCancelled of obj
 
 type Async2Context(threadId : int, threadName : string) =
@@ -43,8 +44,9 @@ type Async2Context(threadId : int, threadName : string) =
 
     let waitHandles             = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
     let mutable last            = 0
+    let mutable isWaiting       = false
 
-    // Get's the context for the current thread, creates on if necessary
+    // Gets the context for the current thread, creates one if necessary
     static member Context = 
         if Async2Context.context = Unchecked.defaultof<Async2Context> then
             let thread = Thread.CurrentThread
@@ -95,20 +97,26 @@ type Async2Context(threadId : int, threadName : string) =
     //  Raises the signal on said handle
     member x.WaitOnHandles () =
         x.CheckCallingThread ()
-        try
-            while waitHandles.Count > 0 do
-                let kvs = waitHandles |> Seq.toArray
-                let whs = 
-                    kvs 
-                    |> Seq.map (fun kv -> let wh, _ = kv.Value in wh)
-                    |> Seq.toArray
-                let result = WaitHandle.WaitAny whs
-                let kv = kvs.[result]
-                let _, a = kv.Value
-                a (kv.Key, None)
-        with 
-            | e -> TraceException e
-                   reraise () 
+        if isWaiting then ()
+        else
+            isWaiting <- true
+            try
+                try
+                    while waitHandles.Count > 0 do
+                        let kvs = waitHandles |> Seq.toArray
+                        let whs = 
+                            kvs 
+                            |> Seq.map (fun kv -> let wh, _ = kv.Value in wh)
+                            |> Seq.toArray
+                        let result = WaitHandle.WaitAny whs
+                        let kv = kvs.[result]
+                        let _, a = kv.Value
+                        a (kv.Key, None)
+                with 
+                    | e -> TraceException e
+                           reraise () 
+            finally
+                isWaiting <- false
 
 type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->unit
 
@@ -118,27 +126,36 @@ module Async2 =
 
     // Used to create Async2 workflow from continuation functions
     let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) -> 
-//        ctx.CheckCallingThread ()
+        ctx.CheckCallingThread ()
         f ctx comp exe canc
 
     // Awaits a WaitHandle, if await is successful computes a value 
-    let inline AwaitWaitHandleAndDo (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> = 
+    let inline AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
             let signal (id, cro) = 
                 ctx.UnregisterWaitHandle id
+                if disposeHandle then 
+                    Dispose waitHandle
                 match cro with
                 | Some cr   -> canc cr 
                 | _         -> comp <| a ()
             ctx.RegisterWaitHandle waitHandle signal
 
     // Awaits a WaitHandle 
-    let AwaitWaitHandle (waitHandle : WaitHandle) : Async2<unit> = 
-        AwaitWaitHandleAndDo waitHandle <| fun () -> ()
+    let AwaitWaitHandle (disposeHandle : bool) (waitHandle : WaitHandle) : Async2<unit> = 
+        AwaitWaitHandleAndDo disposeHandle waitHandle <| fun () -> ()
 
     // Awaits a task
     let AwaitTask (task : Task<'T>) : Async2<'T> = 
         let ar : IAsyncResult = upcast task
-        AwaitWaitHandleAndDo ar.AsyncWaitHandle <| fun () -> task.Result
+        AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> task.Result
+
+    // Performs a switch to captured SynchronizationContext and awaits the result
+    let AwaitSwitchToContext (sc : SynchronizationContext) (a : unit->'T) : Async2<'T> =
+        let evt     = new ManualResetEvent false
+        let result  = ref Unchecked.defaultof<'T>
+        let callback = SendOrPostCallback (fun obj -> result := a (); ignore <| evt.Set ())
+        AwaitWaitHandleAndDo true evt <| fun () -> !result
 
     // Cancels a workflow
     let Cancel (state : obj) : Async2<unit> = 
@@ -152,7 +169,8 @@ module Async2 =
             f (ctx, comp, exe, canc)
             ctx.WaitOnHandles ()
         with
-        | e -> exe e
+        | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected 
+                exe e
     
     // Starts an Async2 workflow inside an Async2 workflow, note that the child workflow will share the same thread
     let StartChild (f : Async2<'T>) : Async2<Async2<'T>> = 
