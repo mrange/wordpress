@@ -152,9 +152,11 @@ module Async2 =
 
     // Performs a switch to captured SynchronizationContext and awaits the result
     let AwaitSwitchToContext (sc : SynchronizationContext) (a : unit->'T) : Async2<'T> =
-        let evt     = new ManualResetEvent false
-        let result  = ref Unchecked.defaultof<'T>
-        let callback = SendOrPostCallback (fun obj -> result := a (); ignore <| evt.Set ())
+        let evt         = new ManualResetEvent false
+        let result      = ref Unchecked.defaultof<'T>
+        let sc          = if sc <> null then sc else SynchronizationContext()
+        let callback    = SendOrPostCallback (fun _ -> result := a (); ignore <| evt.Set ())
+        sc.Post (callback, null)
         AwaitWaitHandleAndDo true evt <| fun () -> !result
 
     // Cancels a workflow
@@ -162,7 +164,7 @@ module Async2 =
         FromContinuations <| fun ctx comp exe canc ->
             canc <| UserCancelled state
 
-    // Starts an Async2 workflow
+    // Starts an Async2 workflow on current thread
     let Start (f : Async2<'T>) comp exe canc : unit =  
         let ctx = Async2Context.Context
         try
@@ -172,6 +174,15 @@ module Async2 =
         | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected 
                 exe e
     
+    // Starts an Async2 workflow on new thread
+    let StartNewThread (apartmentState : ApartmentState) (f : Async2<'T>) comp exe canc : Thread =
+        let start  = ThreadStart (fun () -> Start f comp exe canc)  
+        let thread = Thread (start)
+        thread.IsBackground <- true
+        thread.SetApartmentState apartmentState
+        thread.Start ()
+        thread
+
     // Starts an Async2 workflow inside an Async2 workflow, note that the child workflow will share the same thread
     let StartChild (f : Async2<'T>) : Async2<Async2<'T>> = 
         FromContinuations <| fun ctx comp exe canc ->

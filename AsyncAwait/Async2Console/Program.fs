@@ -31,7 +31,7 @@ let readText (fileName : string) =
         return text
     }
 
-let composite =
+let composite (sc : SynchronizationContext) =
     async2 {
         let! x = Async2.StartChild <| readText "SomeText.txt" 
         let! y = Async2.StartChild <| readText "SomeOtherText.txt" 
@@ -39,9 +39,13 @@ let composite =
         let! xx = x
         let! yy = y
 
-        return xx + " " + yy
-    }
+        let zz = xx + " " + yy
 
+        do! Async2.AwaitSwitchToContext sc <| fun () -> printfn "Result: %s" zz 
+
+        return zz
+    }
+(*
 let forExpression =
     async2 {
         for i in 0..9 do
@@ -49,7 +53,7 @@ let forExpression =
             return zz
         return ""
     }
-
+*)
 [<EntryPoint>]
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
@@ -61,5 +65,6 @@ let main argv =
     let canc (cr : CancelReason) : unit = 
         printfn "Operation cancelled: %A" cr
 
-    Async2.Start composite comp exe canc
+    let t = Async2.StartNewThread ApartmentState.STA (composite SynchronizationContext.Current) comp exe canc
+    t.Join ()
     0
