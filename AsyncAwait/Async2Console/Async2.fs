@@ -267,9 +267,9 @@ module Async2 =
             f (ctx, fcomp, exe, canc)
 
     // Combine is used when sequencing in computation expressions
-    let Combine (f : Async2<'T>) (s : Async2<'T>) : Async2<'T> = 
+    let Combine (f : Async2<unit>) (s : Async2<'T>) : Async2<'T> = 
         FromContinuations <| fun ctx comp exe canc ->
-            let fcomp (v : 'T) : unit = 
+            let fcomp () : unit = 
                 s (ctx, comp, exe, canc)
             f (ctx, fcomp, exe, canc)
 
@@ -279,27 +279,24 @@ module Async2 =
             func () (ctx, comp, exe, canc)
 
     // For is invoked by for .. do
-    let For (vs : seq<'T>) (b : 'T->Async2<'U>) : Async2<'U> = 
+    let For (vs : seq<'T>) (b : 'T->Async2<unit>) : Async2<unit> = 
         FromContinuations <| fun ctx comp exe canc ->
-            let c = ref true
             let e = vs.GetEnumerator ()
             let bexe (ex : exn)  : unit = 
-                c := false
                 Dispose e
                 exe ex
             let bcanc (cr : CancelReason) : unit = 
-                c := false
                 Dispose e
                 canc cr
-            let rec bcomp (v : 'U)  : unit =
-                if !c && e.MoveNext () then
+            let rec bcomp ()  : unit =
+                if e.MoveNext () then
                     let bb = b e.Current
                     bb (ctx, bcomp, bexe, bcanc)
-                else if !c then
+                else 
                     Dispose e
-                    comp v
+                    comp ()
             try 
-                bcomp Unchecked.defaultof<'U>
+                bcomp ()
             with 
             | ex -> bexe ex
 
@@ -364,21 +361,14 @@ module Async2 =
             | e -> fexe e
 
     // Invoked by while..do
-    let While (t : unit->bool) (b : Async2<'T>) : Async2<'T> = 
+    let While (t : unit->bool) (b : Async2<unit>) : Async2<unit> = 
         FromContinuations <| fun ctx comp exe canc ->
-            let c = ref true
-            let bexe (ex : exn)  : unit = 
-                c := false
-                exe ex
-            let bcanc (cr : CancelReason) : unit = 
-                c := false
-                canc cr
-            let rec bcomp (v : 'T)  : unit = 
-                if !c && t () then
-                    b (ctx, bcomp, bexe, bcanc)
-                else if !c then
-                    comp v
-            bcomp Unchecked.defaultof<'T>        
+            let rec bcomp ()  : unit = 
+                if t () then
+                    b (ctx, bcomp, exe, canc)
+                else 
+                    comp ()
+            bcomp () 
 
     // Invoked by yield
     let Yield (v : 'T) : Async2<'T> = 
@@ -389,9 +379,9 @@ module Async2 =
     let YieldFrom v : Async2<'T> = v
 
     // Invoked by empty else branches
-    let Zero () : Async2<'T> = 
+    let Zero () : Async2<unit> = 
         FromContinuations <| fun ctx comp exe canc ->
-            comp Unchecked.defaultof<'T>
+            comp ()
 
 // The computation expression builder
 type Async2Builder() = 

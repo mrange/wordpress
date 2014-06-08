@@ -16,14 +16,6 @@ open System.Threading
 
 open mrange
 
-// TODO: 
-// Investigate exception handling
-// For/While not working properly
-
-type DisposeTest(name : string) =
-    interface IDisposable with
-        member x.Dispose () = printfn "Disposed: %s" name
-
 let readText (fileName : string) =
     async2 {
         use stream = new StreamReader (fileName)
