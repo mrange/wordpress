@@ -58,6 +58,9 @@ let forExpression =
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 
+    ignore <| Async2Test.runTestCases ()
+
+(*
     let comp (v : 'T)   : unit = 
         printfn "Operation completed: %A" v
     let exe (ex : exn)  : unit = 
@@ -67,4 +70,5 @@ let main argv =
 
     let t = Async2.StartNewThread ApartmentState.STA (composite SynchronizationContext.Current) comp exe canc
     t.Join ()
+    *)
     0

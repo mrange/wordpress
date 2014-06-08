@@ -55,6 +55,7 @@
   <Import Project="$(FSharpTargetsPath)" />
   <ItemGroup>
     <Compile Include="Async2.fs" />
+    <Compile Include="Async2Test.fs" />
     <Compile Include="Program.fs" />
     <None Include="App.config" />
     <Content Include="SomeOtherText.txt">

@@ -57,8 +57,14 @@ type Async2ThreadContext(threadId : int, threadName : string) =
         Async2ThreadContext.context
 
     member x.RegisterContext (ctx : Async2Context) =
+        x.CheckCallingThread ()
         last <- last + 1
         contexts.Add (last, WeakReference(ctx))
+        last
+
+    member x.UnregisterContext (id : int) =
+        x.CheckCallingThread ()
+        ignore <| contexts.Remove id
 
     // Checks if the calling thread is the same as the thread owning the Async2Context
     //  Used to detect unintended thread-switches
@@ -102,16 +108,23 @@ type Async2ThreadContext(threadId : int, threadName : string) =
         finally
             x.CleanUpContexts ()
 
-and Async2Context(threadContext : Async2ThreadContext) =
+and Async2Context(threadContext : Async2ThreadContext) as this =
 
     let waitHandles             = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
     let mutable last            = 0
+    let mutable id              = 0
+
+    do
+        id <- threadContext.RegisterContext this
+
+    interface IDisposable with
+        member x.Dispose () = threadContext.UnregisterContext id
+
 
     static member New () = 
         let threadContext = Async2ThreadContext.Current
-        let context = Async2Context (threadContext)
-        threadContext.RegisterContext context
-        context
+        new Async2Context(threadContext)
+
 
     member x.ThreadContext = threadContext
 
@@ -203,13 +216,14 @@ module Async2 =
 
     // Starts an Async2 workflow on current thread
     let Start (f : Async2<'T>) comp exe canc : unit =  
-        let ctx = Async2Context.New ()
+        use ctx = Async2Context.New ()
         try
             f (ctx, comp, exe, canc)
             ctx.WaitOnHandles ()
         with
         | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected 
                 exe e
+
     
     // Starts an Async2 workflow on new thread
     let StartNewThread (apartmentState : ApartmentState) (f : Async2<'T>) comp exe canc : Thread =
