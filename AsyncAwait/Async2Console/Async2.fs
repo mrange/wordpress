@@ -29,6 +29,10 @@ module Utils =
         with
             | e -> TraceException e
 
+    let DefaultSynchronizationContext = SynchronizationContext ()
+    let DefaultTo<'T when 'T : null> (v : 'T) (d : 'T) = if obj.ReferenceEquals (v, null) then d else v
+
+
 type CancelReason =
     | ApplicationShutDown
     | ThreadShutDown
@@ -36,22 +40,25 @@ type CancelReason =
     | TokenCancelled of CancellationToken
     | UserCancelled of obj
 
-type Async2Context(threadId : int, threadName : string) =
 
-    // Async2Context is thread-affine which means it's associated with a particular thread
-    //  [<ThreadStatic>] utilizes thread-local storage to give us a new unique context per thread
-    [<ThreadStatic>] [<DefaultValue>] static val mutable private context : Async2Context
+type Async2ThreadContext(threadId : int, threadName : string) =
 
-    let waitHandles             = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
+    let contexts = Dictionary<int, WeakReference>()
     let mutable last            = 0
-    let mutable isWaiting       = false
 
-    // Gets the context for the current thread, creates one if necessary
-    static member Context = 
-        if Async2Context.context = Unchecked.defaultof<Async2Context> then
+    // Async2ThreadContext is thread-affine which means it's associated with a particular thread
+    //  [<ThreadStatic>] utilizes thread-local storage to give us a new unique context per thread
+    [<ThreadStatic>] [<DefaultValue>] static val mutable private context : Async2ThreadContext
+
+    static member Current = 
+        if Async2ThreadContext.context = Unchecked.defaultof<_> then
             let thread = Thread.CurrentThread
-            Async2Context.context <- Async2Context (thread.ManagedThreadId, thread.Name)
-        Async2Context.context
+            Async2ThreadContext.context <- Async2ThreadContext (thread.ManagedThreadId, thread.Name |> DefaultTo "<NULL>")
+        Async2ThreadContext.context
+
+    member x.RegisterContext (ctx : Async2Context) =
+        last <- last + 1
+        contexts.Add (last, WeakReference(ctx))
 
     // Checks if the calling thread is the same as the thread owning the Async2Context
     //  Used to detect unintended thread-switches
@@ -59,30 +66,77 @@ type Async2Context(threadId : int, threadName : string) =
         let thread = Thread.CurrentThread
         if threadId <> thread.ManagedThreadId then
             failwith 
-                "Async2Context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
+                "Async2 context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
                 threadId
                 threadName
                 thread.ManagedThreadId
                 thread.Name
 
+    member private x.CleanUpContexts () = 
+        let kvs = contexts |> Seq.toArray
+        for kv in kvs do
+            if kv.Value.Target = null then
+                ignore <| contexts.Remove kv.Key
+
+    member internal x.WaitOnHandles () =
+        x.CheckCallingThread ()
+        try
+            try
+                let waitHandles = 
+                    contexts 
+                    |> Seq.map (fun kv -> kv.Value.Target) 
+                    |> Seq.cast<Async2Context>
+                    |> Seq.collect (fun ac -> ac.WaitHandles)
+                    |> Seq.toArray 
+
+                if waitHandles.Length > 0 then
+                    let whs = 
+                        waitHandles 
+                        |> Array.map (fun (_, wh,_) -> wh)
+                    let result = WaitHandle.WaitAny whs
+                    let id, wh, a = waitHandles.[result]
+                    a (id, None)
+            with 
+                | e ->  TraceException e
+                        reraise () 
+        finally
+            x.CleanUpContexts ()
+
+and Async2Context(threadContext : Async2ThreadContext) =
+
+    let waitHandles             = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
+    let mutable last            = 0
+
+    static member New () = 
+        let threadContext = Async2ThreadContext.Current
+        let context = Async2Context (threadContext)
+        threadContext.RegisterContext context
+        context
+
+    member x.ThreadContext = threadContext
+
+    member x.WaitHandles =
+        waitHandles 
+        |> Seq.map (fun kv -> let wh,a = kv.Value in kv.Key,wh,a)
+
     // Registers a WaitHandle async2 will wait upon whenever the owning thread goes idle
     //  Call signal when WaitHandle is signalled or cancelled
     member x.RegisterWaitHandle (waitHandle : WaitHandle) (signal : int*CancelReason option->unit) : unit =   
         if waitHandle = null then failwith "waitHandle must not be null"
-        x.CheckCallingThread ()
+        threadContext.CheckCallingThread ()
         last <- last + 1
         waitHandles.Add (last, (waitHandle, signal))
 
     // Unregisters a WaitHandle
     //  Doesn't raise cancel action
     member x.UnregisterWaitHandle (i : int) : unit = 
-        x.CheckCallingThread ()
+        threadContext.CheckCallingThread ()
         ignore <| waitHandles.Remove i
 
     // Cancels all WaitHandles
     //  Raises cancel actions
     member x.CancelAllWaitHandles (cr : CancelReason) =
-        x.CheckCallingThread ()
+        threadContext.CheckCallingThread ()
         let kvs = waitHandles |> Seq.toArray
         waitHandles.Clear ()
         let cro = Some cr
@@ -96,27 +150,10 @@ type Async2Context(threadId : int, threadName : string) =
     // Waits until one WaitHandle is signalled
     //  Raises the signal on said handle
     member x.WaitOnHandles () =
-        x.CheckCallingThread ()
-        if isWaiting then ()
-        else
-            isWaiting <- true
-            try
-                try
-                    while waitHandles.Count > 0 do
-                        let kvs = waitHandles |> Seq.toArray
-                        let whs = 
-                            kvs 
-                            |> Seq.map (fun kv -> let wh, _ = kv.Value in wh)
-                            |> Seq.toArray
-                        let result = WaitHandle.WaitAny whs
-                        let kv = kvs.[result]
-                        let _, a = kv.Value
-                        a (kv.Key, None)
-                with 
-                    | e -> TraceException e
-                           reraise () 
-            finally
-                isWaiting <- false
+        threadContext.CheckCallingThread ()
+        while waitHandles.Count > 0 do
+            threadContext.WaitOnHandles ()
+
 
 type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->unit
 
@@ -126,7 +163,7 @@ module Async2 =
 
     // Used to create Async2 workflow from continuation functions
     let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) -> 
-        ctx.CheckCallingThread ()
+        ctx.ThreadContext.CheckCallingThread ()
         f ctx comp exe canc
 
     // Awaits a WaitHandle, if await is successful computes a value 
@@ -154,7 +191,7 @@ module Async2 =
     let AwaitSwitchToContext (sc : SynchronizationContext) (a : unit->'T) : Async2<'T> =
         let evt         = new ManualResetEvent false
         let result      = ref Unchecked.defaultof<'T>
-        let sc          = if sc <> null then sc else SynchronizationContext()
+        let sc          = sc |> DefaultTo DefaultSynchronizationContext
         let callback    = SendOrPostCallback (fun _ -> result := a (); ignore <| evt.Set ())
         sc.Post (callback, null)
         AwaitWaitHandleAndDo true evt <| fun () -> !result
@@ -166,7 +203,7 @@ module Async2 =
 
     // Starts an Async2 workflow on current thread
     let Start (f : Async2<'T>) comp exe canc : unit =  
-        let ctx = Async2Context.Context
+        let ctx = Async2Context.New ()
         try
             f (ctx, comp, exe, canc)
             ctx.WaitOnHandles ()
