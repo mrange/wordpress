@@ -292,6 +292,7 @@ module Async2 =
                 if e.MoveNext () then
                     let bb = b e.Current
                     bb (ctx, bcomp, bexe, bcanc)
+
                 else 
                     Dispose e
                     comp ()
@@ -370,14 +371,6 @@ module Async2 =
                     comp ()
             bcomp () 
     
-    // Invoked by yield
-//    let Yield (v : 'T) : Async2<'T> = 
-//        FromContinuations <| fun ctx comp exe canc ->
-//            comp v
-
-    // Invoked by yield! 
-//    let YieldFrom v : Async2<'T> = v
-
     // Invoked by empty else branches
     let Zero () : Async2<unit> = 
         FromContinuations <| fun ctx comp exe canc ->

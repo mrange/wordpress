@@ -39,6 +39,7 @@ let composite (sc : SynchronizationContext) =
     }
 
 [<EntryPoint>]
+[<STAThread>]
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 

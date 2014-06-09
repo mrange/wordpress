@@ -160,8 +160,6 @@ module Async2Test =
         }
         startTestRun_ExpectedValue "bind" c 3
 
-//    let testCombine () = 
-
     let testDelay () = 
         let a = async2 {
             return 1
@@ -346,10 +344,14 @@ module Async2Test =
 
     let runTestCases () = 
         testBind ()
+        // testCombine ()
         testDelay ()
         testFor ()
         testReturn ()
         testReturnFrom ()
+        // testTryFinally ()
+        // testTryWith ()
+        // testUsing ()
         testWhile ()
         testZero ()
         if errors > 0 then
