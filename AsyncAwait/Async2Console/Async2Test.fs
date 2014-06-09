@@ -15,6 +15,7 @@ namespace mrange
 module Async2Test =
 
     open System
+    open System.Collections.Generic
     open System.Linq
 
     type DisposeChainer(d : IDisposable, a : unit->unit) =
@@ -23,8 +24,27 @@ module Async2Test =
                     a ()
                     d.Dispose ()
     
-    let chainDispose (d : IDisposable) (a : unit->unit) = 
-        new DisposeChainer (d, a)
+    type DisposeDetectorEnumerator<'T>(e : IEnumerator<'T>, a : unit->unit) =
+        interface IEnumerator<'T> with
+            member x.Current        = e.Current
+            member x.Dispose ()     = a (); e.Dispose ()
+            member x.MoveNext ()    = e.MoveNext ()
+            member x.Reset ()       = e.Reset ()
+
+            member x.Current : obj  = upcast e.Current
+
+    type DisposeDetectorEnumerable<'T>(e : IEnumerable<'T>, a : unit->unit) =
+        
+        let create () = new DisposeDetectorEnumerator<_> (e.GetEnumerator (), a)
+
+        interface IEnumerable<'T> with
+            member x.GetEnumerator () : IEnumerator<'T> = 
+                upcast create ()
+            member x.GetEnumerator () : System.Collections.IEnumerator = 
+                upcast create ()
+
+    type IEnumerable<'T> with
+        member x.DisposeDetector (a : unit->unit) : IEnumerable<'T> = upcast DisposeDetectorEnumerable (x, a)
 
     exception TestException 
     exception LoopException 
@@ -49,20 +69,6 @@ module Async2Test =
         print ConsoleColor.Red      "ERROR" msg
 
 
-    let ncomp   (n : string) vv v               = if v <> vv then error <| sprintf "%s - normal completion, expected %A, got %A" n vv v
-    let nexe    (n : string) (ex : exn)         = error <| sprintf "%s - normal exception   , unexpected %A" n ex
-    let ncanc   (n : string) (cr : CancelReason)= error <| sprintf "%s - normal cancel      , unexpected %A" n cr
-    let ecomp   (n : string) v                  = error <| sprintf "%s - exception value    , unexpected %A" n v
-    let eexe    (n : string) (ex : exn)         = match ex with 
-                                                  | :? TestException -> ()
-                                                  | _ -> error <| sprintf "%s - exception exception, unexpected %A" n ex
-    let ecanc   (n : string) (cr : CancelReason)= error <| sprintf "%s - exception cancel   , unexpected %A" n cr
-    let ccomp   (n : string) v                  = error <| sprintf "%s - cancel value       , unexpected %A" n v
-    let cexe    (n : string) (ex : exn)         = error <| sprintf "%s - cancel exception   , unexpected %A" n ex
-    let ccanc   (n : string) (cr : CancelReason)= match cr with 
-                                                  | CancelReason.UserCancelled o when obj.ReferenceEquals (o, cancelObject) -> ()
-                                                  | _ -> error <| sprintf "%s - cancel cancel      , unexpected %A" n cr
-
     type TestContinuations<'T> = 
         {
             name    : string
@@ -77,9 +83,9 @@ module Async2Test =
             ccanc   : CancelReason-> unit
         }
 
-    let userException<'T when 'T :> exn> n (ex : #exn) = 
+    let userException<'T when 'T :> exn> n (ex : exn) = 
         match ex with 
-        | :? 'T -> ()      
+        | :? 'T -> ()
         | _ -> error <| sprintf "%s - exception exception, unexpected %A" n ex
 
     let userCancel n (co : obj) cr =
@@ -94,9 +100,7 @@ module Async2Test =
             nexe  = fun ex -> error <| sprintf "%s - normal exception   , unexpected %A" n ex
             ncanc = fun cr -> error <| sprintf "%s - normal cancel      , unexpected %A" n cr
             ecomp = fun v  -> error <| sprintf "%s - exception value    , unexpected %A" n v
-            eexe  = fun ex -> match ex with 
-                              | :? TestException -> ()
-                              | _ -> error <| sprintf "%s - exception exception, unexpected %A" n ex
+            eexe  = userException<TestException> n
             ecanc = fun cr -> error <| sprintf "%s - exception cancel   , unexpected %A" n cr
             ccomp = fun v  -> error <| sprintf "%s - cancel value       , unexpected %A" n v
             cexe  = fun ex -> error <| sprintf "%s - cancel exception   , unexpected %A" n ex
@@ -187,12 +191,14 @@ module Async2Test =
         }
         startTestRun_ExpectedValue "for" b 10
 
-        let forCancel = "for - cancel"
+        let disposed    = ref 0
+
+        let forCancel   = "for - cancel"
         let c : Async2<int> = async2 {
             let xx = ref 0
 
-            // TODO: Test enumerator disposed
-            for i in 0..9 do
+            let range = Enumerable.Range(0,10).DisposeDetector(fun () -> disposed := !disposed + 1)
+            for i in range do
                 let! aa = a
                 xx := !xx + aa
                 if i > 5 then 
@@ -212,6 +218,36 @@ module Async2Test =
                                 ecanc = uc
                 }
             )
+
+        let forException   = "for - exception"
+        let d : Async2<int> = async2 {
+            let xx = ref 0
+
+            let range = Enumerable.Range(0,10).DisposeDetector(fun () -> disposed := !disposed + 1)
+            for i in range do
+                let! aa = a
+                xx := !xx + aa
+                if i > 5 then 
+                    raise LoopException ()
+
+            return !xx                
+        }
+
+        let ue = userException<LoopException> forException
+        startTestRun 
+            d 
+            (
+                {
+                    failure forException
+                        with    nexe = ue
+                                cexe = ue
+                                eexe = ue
+                }
+            )
+
+        let expected = 6
+        if !disposed <> expected then
+            error <| sprintf "Expected to invoke Dispose %d times but was invoked %d times" expected !disposed
 
     let testWhile () = 
 
@@ -273,15 +309,15 @@ module Async2Test =
             return !xx                
         }
 
-        let uc = userCancel whileException whileException
+        let ue = userException<LoopException> whileException
         startTestRun 
-            c 
+            d 
             (
                 {
                     failure whileException
-                        with    ncanc = uc
-                                ccanc = uc
-                                ecanc = uc
+                        with    nexe = ue
+                                cexe = ue
+                                eexe = ue
                 }
             )
 
