@@ -37,15 +37,7 @@ let composite (sc : SynchronizationContext) =
 
         return zz
     }
-(*
-let forExpression =
-    async2 {
-        for i in 0..9 do
-            let! zz = composite
-            return zz
-        return ""
-    }
-*)
+
 [<EntryPoint>]
 let main argv = 
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory

@@ -27,6 +27,8 @@ module Async2Test =
         new DisposeChainer (d, a)
 
     exception TestException 
+    exception LoopException 
+
     let cancelObject = "Cancelled"
 
     let mutable errors = 0
@@ -75,8 +77,13 @@ module Async2Test =
             ccanc   : CancelReason-> unit
         }
 
-    let userCancel n (co : obj) =  
-        fun cr -> match cr with 
+    let userException<'T when 'T :> exn> n (ex : #exn) = 
+        match ex with 
+        | :? 'T -> ()      
+        | _ -> error <| sprintf "%s - exception exception, unexpected %A" n ex
+
+    let userCancel n (co : obj) cr =
+        match cr with 
         | CancelReason.UserCancelled o when obj.ReferenceEquals (o, co) -> ()
         | _ -> error <| sprintf "%s - cancel cancel      , unexpected %A" n cr
 
@@ -206,6 +213,78 @@ module Async2Test =
                 }
             )
 
+    let testWhile () = 
+
+        let a = async2 {
+            return 1
+        }
+        let b : Async2<int> = async2 {
+            let xx = ref 0
+            let yy = ref 0
+
+            while !yy < 10 do
+                yy := !yy + 1
+                let! aa = a
+                xx := !xx + aa
+
+            return !xx                
+        }
+        startTestRun_ExpectedValue "while" b 10
+
+        let whileCancel = "while - cancel"
+        let c : Async2<int> = async2 {
+            let xx = ref 0
+            let yy = ref 0
+
+            while !yy < 10 do
+                yy := !yy + 1
+                let! aa = a
+                xx := !xx + aa
+                if !yy > 5 then 
+                    do! Async2.Cancel whileCancel
+
+            return !xx                
+        }
+
+        let uc = userCancel whileCancel whileCancel
+        startTestRun 
+            c 
+            (
+                {
+                    failure whileCancel
+                        with    ncanc = uc
+                                ccanc = uc
+                                ecanc = uc
+                }
+            )
+
+        let whileException = "while - exception"
+        let d : Async2<int> = async2 {
+            let xx = ref 0
+            let yy = ref 0
+
+            while !yy < 10 do
+                yy := !yy + 1
+                let! aa = a
+                xx := !xx + aa
+                if !yy > 5 then 
+                    raise LoopException ()
+
+            return !xx                
+        }
+
+        let uc = userCancel whileException whileException
+        startTestRun 
+            c 
+            (
+                {
+                    failure whileException
+                        with    ncanc = uc
+                                ccanc = uc
+                                ecanc = uc
+                }
+            )
+
     let testReturn () = 
         let a = async2 {
             return 1
@@ -235,6 +314,7 @@ module Async2Test =
         testFor ()
         testReturn ()
         testReturnFrom ()
+        testWhile ()
         testZero ()
         if errors > 0 then
             error "Error(s) detected"

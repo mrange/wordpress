@@ -369,14 +369,14 @@ module Async2 =
                 else 
                     comp ()
             bcomp () 
-
+    
     // Invoked by yield
-    let Yield (v : 'T) : Async2<'T> = 
-        FromContinuations <| fun ctx comp exe canc ->
-            comp v
+//    let Yield (v : 'T) : Async2<'T> = 
+//        FromContinuations <| fun ctx comp exe canc ->
+//            comp v
 
     // Invoked by yield! 
-    let YieldFrom v : Async2<'T> = v
+//    let YieldFrom v : Async2<'T> = v
 
     // Invoked by empty else branches
     let Zero () : Async2<unit> = 
@@ -396,8 +396,8 @@ type Async2Builder() =
         member x.TryWith(f, e)      = Async2.TryFinally f e
         member x.Using(v, f)        = Async2.Using v f
         member x.While(t, b)        = Async2.While t b
-        member x.Yield(v)           = Async2.Yield v
-        member x.YieldFrom(v)       = Async2.Yield v
+//        member x.Yield(v)           = Async2.Yield v
+//        member x.YieldFrom(v)       = Async2.YieldFrom v
         member x.Zero()             = Async2.Zero ()
 
 
