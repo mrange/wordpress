@@ -18,16 +18,19 @@ module Async2Test =
     open System.Collections.Generic
     open System.Linq
 
-    type DisposeChainer(d : IDisposable, a : unit->unit) =
+    type Disposable(a : unit->unit) =
+        
+        member x.InvokeDisposeAction () = a ()
+
         interface IDisposable with
-            member x.Dispose () = 
-                    a ()
-                    d.Dispose ()
+            member x.Dispose () = x.InvokeDisposeAction ()
     
     type DisposeDetectorEnumerator<'T>(e : IEnumerator<'T>, a : unit->unit) =
+        inherit Disposable(a)
+
         interface IEnumerator<'T> with
             member x.Current        = e.Current
-            member x.Dispose ()     = a (); e.Dispose ()
+            member x.Dispose ()     = base.InvokeDisposeAction (); e.Dispose ()
             member x.MoveNext ()    = e.MoveNext ()
             member x.Reset ()       = e.Reset ()
 
@@ -47,11 +50,18 @@ module Async2Test =
         member x.DisposeDetector (a : unit->unit) : IEnumerable<'T> = upcast DisposeDetectorEnumerable (x, a)
 
     exception TestException 
-    exception LoopException 
+    let cancelObject        = "cancelObject"
+    let testCaseInvocations = 3
 
-    let cancelObject = "Cancelled"
+    let disposable (a : unit->unit) = new Disposable(a)
 
-    let mutable errors = 0
+    let errors = ref 0
+
+    let sum (i : int ref) (a : int) = 
+        i := !i + a
+
+    let inc (i : int ref) = 
+        sum i 1
 
     let inline print (cc : ConsoleColor) (label : string) (msg : string) =
         let color = Console.ForegroundColor
@@ -65,22 +75,22 @@ module Async2Test =
         print ConsoleColor.White    "INFO " msg
 
     let error msg = 
-        errors <- errors + 1
+        inc errors
         print ConsoleColor.Red      "ERROR" msg
 
 
-    type TestContinuations<'T> = 
+    type TestContext<'T> = 
         {
-            name    : string
-            ncomp   : 'T          -> unit
-            nexe    : exn         -> unit
-            ncanc   : CancelReason-> unit
-            ecomp   : 'T          -> unit
-            eexe    : exn         -> unit
-            ecanc   : CancelReason-> unit
-            ccomp   : 'T          -> unit
-            cexe    : exn         -> unit
-            ccanc   : CancelReason-> unit
+            Name        : string
+            Normal_Comp : 'T          -> unit
+            Normal_Exe  : exn         -> unit
+            Normal_Canc : CancelReason-> unit
+            Exe_Comp    : 'T          -> unit
+            Exe_Exe     : exn         -> unit
+            Exe_Canc    : CancelReason-> unit
+            Cancel_Comp : 'T          -> unit
+            Cancel_Exe  : exn         -> unit
+            Cancel_Canc : CancelReason-> unit
         }
 
     let userException<'T when 'T :> exn> n (ex : exn) = 
@@ -93,268 +103,261 @@ module Async2Test =
         | CancelReason.UserCancelled o when obj.ReferenceEquals (o, co) -> ()
         | _ -> error <| sprintf "%s - cancel cancel      , unexpected %A" n cr
 
-    let failure (n : string) =     
+    let testContext (n : string) (exp : 'T) : TestContext<'T> =     
         {
-            name  = n
-            ncomp = fun v  -> error <| sprintf "%s - normal value       , unexpected %A" n v
-            nexe  = fun ex -> error <| sprintf "%s - normal exception   , unexpected %A" n ex
-            ncanc = fun cr -> error <| sprintf "%s - normal cancel      , unexpected %A" n cr
-            ecomp = fun v  -> error <| sprintf "%s - exception value    , unexpected %A" n v
-            eexe  = userException<TestException> n
-            ecanc = fun cr -> error <| sprintf "%s - exception cancel   , unexpected %A" n cr
-            ccomp = fun v  -> error <| sprintf "%s - cancel value       , unexpected %A" n v
-            cexe  = fun ex -> error <| sprintf "%s - cancel exception   , unexpected %A" n ex
-            ccanc = userCancel n cancelObject
-
+            Name        = n
+            Normal_Comp = fun v  -> if v <> exp then error <| sprintf "%s - normal completion, expected %A, got %A" n exp v
+            Normal_Exe  = fun ex -> error <| sprintf "%s - normal exception   , unexpected %A" n ex
+            Normal_Canc = fun cr -> error <| sprintf "%s - normal cancel      , unexpected %A" n cr
+            Exe_Comp    = fun v  -> error <| sprintf "%s - normal value       , unexpected %A" n v
+            Exe_Exe     = userException<TestException> n
+            Exe_Canc    = fun cr -> error <| sprintf "%s - normal cancel      , unexpected %A" n cr
+            Cancel_Comp = fun v  -> error <| sprintf "%s - cancel value       , unexpected %A" n v
+            Cancel_Exe  = fun ex -> error <| sprintf "%s - cancel exception   , unexpected %A" n ex
+            Cancel_Canc = userCancel n cancelObject
         }
 
-    let expectedValue (n : string) (exp : 'T) : TestContinuations<'T> = 
-        { 
-            (failure n) with 
-                ncomp = fun v  -> if v <> exp then error <| sprintf "%s - normal completion, expected %A, got %A" n exp v
-        }
-        
+    type TestBehavior   = unit->Async2<unit>
+    type TestAsync2<'T> = TestBehavior->Async2<'T>
 
     let startTestRun 
-        (a  : Async2<'T>            ) 
-        (tcs: TestContinuations<'T> )
+        (a      : TestAsync2<'T>    ) 
+        (ctx    : TestContext<'T>   )
         = 
-        let n = async2 {
-            let! v = a            
 
-            return v
-        }   
-        let e = async2 {
-            let! v = a            
+        info <| sprintf "Running test case: %s" ctx.Name
 
-            raise TestException ()
+        let normal  = a <| fun () -> Async2.Zero ()
+        let exe     = a <| fun () -> raise TestException ()
+        let cancel  = a <| fun () -> Async2.Cancel cancelObject
 
-            return v
-        }   
-        let c = async2 {
-            let! v = a            
-            do! Async2.Cancel cancelObject
-            return v
-        }  
-        info <| sprintf "Running test case: %s" tcs.name
-        Async2.Start n tcs.ncomp tcs.nexe tcs.ncanc
-        Async2.Start e tcs.ecomp tcs.eexe tcs.ecanc
-        Async2.Start c tcs.ccomp tcs.cexe tcs.ccanc
+        Async2.Start normal ctx.Normal_Comp ctx.Normal_Exe  ctx.Normal_Canc
+        Async2.Start exe    ctx.Exe_Comp    ctx.Exe_Exe     ctx.Exe_Canc
+        Async2.Start cancel ctx.Cancel_Comp ctx.Cancel_Exe  ctx.Cancel_Canc
         
-    let startTestRun_ExpectedValue (n : string) (a : Async2<'T>) (v : 'T) =
+    let startTestRun_ExpectedValue 
+        (a      : TestAsync2<'T>    ) 
+        (n      : string            ) 
+        (v      : 'T                ) 
+        =
         startTestRun 
             a
-            (expectedValue n v)
+            (testContext n v)
+
+    let ret v = 
+        async2 {
+            return v
+        }
 
     let testBind () = 
-        let a = async2 {
-            return 1
-        }
-        let b = async2 {
-            return 2
-        }
-        let c = async2 {
-            let! aa = a 
-            let! bb = b
-            return aa + bb
-        }
-        startTestRun_ExpectedValue "bind" c 3
+        let test behavior = 
+            async2 {
+                let! aa = ret 1 
+                do! behavior ()
+                let! bb = ret 2
+                return aa + bb
+            }
+
+        startTestRun_ExpectedValue test "bind" 3
+
+    let testCombine () = 
+        let actual = ref 0
+
+        let test behavior = 
+            async2 {
+                for i in 0..9 do    // the for loop is "combined" with the following lines
+                    inc actual      // Visible side-effect of for loop
+                do! behavior ()
+                let! aa = ret 1 
+                return aa
+            }
+
+        startTestRun_ExpectedValue test "combine" 1
+
+        let expected = 10 * testCaseInvocations
+        if !actual <> expected then
+            error <| sprintf "Expected to actual sum to be %d but is %d" expected !actual
 
     let testDelay () = 
-        let a = async2 {
-            return 1
-        }
-        let i = ref 0
-        let b = Async2.Delay <| fun () -> 
-                i := !i + 1
-                a
-        startTestRun_ExpectedValue "delay" b 1
-        let expected = 3
-        if !i <> expected then
-            error <| sprintf "Expected to invoke delay %d times but was invoked %d times" expected !i
+        let actual  = ref 0
+        let test behavior = 
+            Async2.Delay <| fun () -> 
+                inc actual
+                async2 {
+                    do! behavior ()
+                    return 1
+                }
+
+        startTestRun_ExpectedValue test "delay" 1
+
+        let expected = testCaseInvocations
+        if !actual <> expected then
+            error <| sprintf "Expected to invoke delay %d times but was invoked %d times" expected !actual
 
     let testFor () = 
+        let actual = ref 0
 
-        let a = async2 {
-            return 1
-        }
-        let b : Async2<int> = async2 {
-            let xx = ref 0
+        let test behavior = 
+            async2 {
+                let acc = ref 0
 
-            for i in 0..9 do
-                let! aa = a
-                xx := !xx + aa
+                let range = Enumerable.Range(0,10).DisposeDetector(fun () -> inc actual)
+                for i in range do
+                    let! aa = ret 1
+                    sum acc aa
+                    do! behavior ()
 
-            return !xx                
-        }
-        startTestRun_ExpectedValue "for" b 10
+                return !acc
+            }
 
-        let disposed    = ref 0
+        startTestRun_ExpectedValue test "for" 10
 
-        let forCancel   = "for - cancel"
-        let c : Async2<int> = async2 {
-            let xx = ref 0
-
-            let range = Enumerable.Range(0,10).DisposeDetector(fun () -> disposed := !disposed + 1)
-            for i in range do
-                let! aa = a
-                xx := !xx + aa
-                if i > 5 then 
-                    do! Async2.Cancel forCancel
-
-            return !xx                
-        }
-
-        let uc = userCancel forCancel forCancel
-        startTestRun 
-            c 
-            (
-                {
-                    failure forCancel
-                        with    ncanc = uc
-                                ccanc = uc
-                                ecanc = uc
-                }
-            )
-
-        let forException   = "for - exception"
-        let d : Async2<int> = async2 {
-            let xx = ref 0
-
-            let range = Enumerable.Range(0,10).DisposeDetector(fun () -> disposed := !disposed + 1)
-            for i in range do
-                let! aa = a
-                xx := !xx + aa
-                if i > 5 then 
-                    raise LoopException ()
-
-            return !xx                
-        }
-
-        let ue = userException<LoopException> forException
-        startTestRun 
-            d 
-            (
-                {
-                    failure forException
-                        with    nexe = ue
-                                cexe = ue
-                                eexe = ue
-                }
-            )
-
-        let expected = 6
-        if !disposed <> expected then
-            error <| sprintf "Expected to invoke Dispose %d times but was invoked %d times" expected !disposed
+        let expected = testCaseInvocations
+        if !actual <> expected then
+            error <| sprintf "Expected to invoke Dispose %d times but was invoked %d times" expected !actual
 
     let testWhile () = 
+        let test behavior = 
+            async2 {
+                let acc = ref 0
+                let i   = ref 0
 
-        let a = async2 {
-            return 1
-        }
-        let b : Async2<int> = async2 {
-            let xx = ref 0
-            let yy = ref 0
+                while !i < 10 do
+                    let! aa = ret 1
+                    sum acc aa
+                    do! behavior ()
+                    inc i
 
-            while !yy < 10 do
-                yy := !yy + 1
-                let! aa = a
-                xx := !xx + aa
+                return !acc
+            }
 
-            return !xx                
-        }
-        startTestRun_ExpectedValue "while" b 10
-
-        let whileCancel = "while - cancel"
-        let c : Async2<int> = async2 {
-            let xx = ref 0
-            let yy = ref 0
-
-            while !yy < 10 do
-                yy := !yy + 1
-                let! aa = a
-                xx := !xx + aa
-                if !yy > 5 then 
-                    do! Async2.Cancel whileCancel
-
-            return !xx                
-        }
-
-        let uc = userCancel whileCancel whileCancel
-        startTestRun 
-            c 
-            (
-                {
-                    failure whileCancel
-                        with    ncanc = uc
-                                ccanc = uc
-                                ecanc = uc
-                }
-            )
-
-        let whileException = "while - exception"
-        let d : Async2<int> = async2 {
-            let xx = ref 0
-            let yy = ref 0
-
-            while !yy < 10 do
-                yy := !yy + 1
-                let! aa = a
-                xx := !xx + aa
-                if !yy > 5 then 
-                    raise LoopException ()
-
-            return !xx                
-        }
-
-        let ue = userException<LoopException> whileException
-        startTestRun 
-            d 
-            (
-                {
-                    failure whileException
-                        with    nexe = ue
-                                cexe = ue
-                                eexe = ue
-                }
-            )
+        startTestRun_ExpectedValue test "while" 10
 
     let testReturn () = 
-        let a = async2 {
-            return 1
-        }
-        startTestRun_ExpectedValue "return" a 1
+        let test behavior = 
+            async2 {
+                do! behavior ()
+                return 1
+            }
+
+        startTestRun_ExpectedValue test "return" 1
 
     let testReturnFrom () = 
-        let a = async2 {
-            return 1
-        }
-        let b = async2 {
-            return! a
-        }
-        startTestRun_ExpectedValue "return from" b 1
+        let test behavior = 
+            async2 {
+                do! behavior ()
+                return! ret 1
+            }
+
+        startTestRun_ExpectedValue test "return from" 1
+
+    let testTryFinally () = 
+        let actual = ref 0
+        let test behavior = 
+            async2 {
+                try
+                    do! behavior ()
+                finally
+                    inc actual
+                return ()
+            }
+
+        startTestRun_ExpectedValue test "try finally" ()
+
+        let expected = testCaseInvocations
+        if !actual <> expected then
+            error <| sprintf "Expected to run finally %d times but was run %d times" expected !actual
+
+    let testTryWith () = 
+        let actual  = ref 0
+        let zero    = ref 0
+
+        let test behavior = 
+            async2 {
+                try
+                    do! behavior ()
+                with
+                | :? TestException -> inc actual
+                                      raise TestException ()
+                | _ ->  inc zero
+                        failwith "Unexpected catch"
+
+                return ()
+            }
+
+        let test2 behavior = 
+            async2 {
+                try
+                    do! behavior ()
+                with
+                | _ -> inc actual
+                       raise TestException ()
+
+                return ()
+            }
+
+        startTestRun_ExpectedValue test "try with" ()
+
+        startTestRun_ExpectedValue test2 "try with" ()
+
+        let expected = 2
+        if !actual <> expected then
+            error <| sprintf "Expected to run with %d times but was run %d times" expected !actual
+
+    let testUsing () = 
+        let actual = ref 0
+
+        let detector () = disposable <| fun () -> inc actual
+
+        let adetector = 
+            async2 {
+                return detector ()
+            }
+
+        let test behavior = 
+            async2 {
+                use d = detector ()
+                do! behavior ()
+                return ()
+            }
+
+        startTestRun_ExpectedValue test "using" ()
+
+        let test2 behavior = 
+            async2 {
+                use! d = adetector
+                do! behavior ()
+                return ()
+            }
+
+        startTestRun_ExpectedValue test2 "using" ()
+
+        let expected = testCaseInvocations * 2
+        if !actual <> expected then
+            error <| sprintf "Expected to invoke dispose %d times but was invoked %d times" expected !actual
 
     let testZero () = 
-        let x = 0
-        let a = async2 {
-            if x = 1 then
-                return ()
-        }
-        startTestRun_ExpectedValue "zero" a ()
+        let test behavior = 
+            async2 {
+                if false then
+                    return ()
+                do! behavior ()
+            }
+        startTestRun_ExpectedValue test "zero" ()
 
     let runTestCases () = 
         testBind ()
-        // testCombine ()
+        testCombine ()
         testDelay ()
         testFor ()
         testReturn ()
         testReturnFrom ()
-        // testTryFinally ()
-        // testTryWith ()
-        // testUsing ()
+        testTryFinally ()
+        testTryWith ()
+        testUsing ()
         testWhile ()
         testZero ()
-        if errors > 0 then
+        if !errors > 0 then
             error "Error(s) detected"
 
-        errors = 0
+        !errors = 0
