@@ -12,10 +12,12 @@
 
 open System
 open System.IO
+open System.Text
 open System.Threading
 open System.Threading.Tasks
 open System.Windows
 open System.Windows.Controls
+open System.Windows.Threading
 
 open mrange
 
@@ -50,6 +52,10 @@ let main argv =
 
     ignore <| Async2Test.runTestCases ()
 
+    let dispatcher          = Dispatcher.CurrentDispatcher
+    let dispatcherContext   = DispatcherSynchronizationContext (dispatcher)
+    SynchronizationContext.SetSynchronizationContext dispatcherContext
+
     let button              = Button ()
     button.Content          <- "Go!"
     button.Padding          <- Thickness(8.)
@@ -58,17 +64,21 @@ let main argv =
     button.Height           <- 32.
     button.Click.Add (fun e -> ())
 
+    let sb                  = StringBuilder ()
     let text                = TextBlock ()
 
-    let onClick e           =
-        let comp (v : string)   : unit =
-            text.Text <- v
-        let exe (ex : exn)  : unit =
-            printfn "Exception was raised: %A" ex.Message
-        let canc (cr : CancelReason) : unit =
-            printfn "Operation cancelled: %A" cr
+    let id                  = ref 0
 
-        Async2.Start composite comp exe canc
+    let onClick e           =
+        id := !id + 1
+
+        let i = !id
+
+        let v = Async2.Start composite 
+
+        ignore <| sb.AppendLine (i.ToString() + " " + v)
+        text.Text <- sb.ToString ()
+
 
     button.Click.Add onClick
 
@@ -77,6 +87,7 @@ let main argv =
     ignore <| stackPanel.Children.Add text
 
     let window = Window ()
+
     window.MinWidth <- 640.
     window.MinHeight <- 400.
     window.Content <- stackPanel

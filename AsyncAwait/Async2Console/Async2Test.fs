@@ -131,9 +131,9 @@ module Async2Test =
         let exe     = a <| fun () -> raise TestException ()
         let cancel  = a <| fun () -> Async2.Cancel cancelObject
 
-        Async2.Start normal ctx.Normal_Comp ctx.Normal_Exe  ctx.Normal_Canc
-        Async2.Start exe    ctx.Exe_Comp    ctx.Exe_Exe     ctx.Exe_Canc
-        Async2.Start cancel ctx.Cancel_Comp ctx.Cancel_Exe  ctx.Cancel_Canc
+        Async2.StartWithContinuations normal ctx.Normal_Comp ctx.Normal_Exe  ctx.Normal_Canc
+        Async2.StartWithContinuations exe    ctx.Exe_Comp    ctx.Exe_Exe     ctx.Exe_Canc
+        Async2.StartWithContinuations cancel ctx.Cancel_Comp ctx.Cancel_Exe  ctx.Cancel_Canc
 
     let startTestRun_ExpectedValue
         (a      : TestAsync2<'T>    )

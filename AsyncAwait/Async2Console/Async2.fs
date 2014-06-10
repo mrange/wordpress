@@ -253,8 +253,8 @@ module Async2 =
         FromContinuations <| fun ctx comp exe canc ->
             canc <| UserCancelled state
 
-    // Starts an Async2 workflow on current thread
-    let Start (f : Async2<'T>) comp exe canc : unit =
+    // Starts an Async2 workflow on the current thread
+    let StartWithContinuations (f : Async2<'T>) comp exe canc : unit =
         use ctx = Async2Context.New ()
         try
             f (ctx, comp, exe, canc)
@@ -263,6 +263,24 @@ module Async2 =
         | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected
                 exe e
 
+    // Starts an Async2 workflow on the current thread
+    let Start (f : Async2<'T>) : 'T =
+        use ctx = Async2Context.New ()
+
+        let result = ref Unchecked.defaultof<'T>
+
+        let comp v = result := v
+        let exe  e = raise e
+        let canc cr= raise <| CancelException cr
+
+        try
+            f (ctx, comp, exe, canc)
+            ctx.WaitOnHandles ()
+        with
+        | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected
+                reraise ()
+
+        !result
 
     // Starts an Async2 workflow on new thread
     let StartNewThread (apartmentState : ApartmentState) (f : Async2<'T>) comp exe canc : Thread =
