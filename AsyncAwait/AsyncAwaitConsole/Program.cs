@@ -1,10 +1,10 @@
 ﻿// ----------------------------------------------------------------------------------------------
 // Copyright (c) Mårten Rånge.
 // ----------------------------------------------------------------------------------------------
-// This source code is subject to terms and conditions of the Microsoft Public License. A 
-// copy of the license can be found in the License.html file at the root of this distribution. 
-// If you cannot locate the  Microsoft Public License, please send an email to 
-// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+// This source code is subject to terms and conditions of the Microsoft Public License. A
+// copy of the license can be found in the License.html file at the root of this distribution.
+// If you cannot locate the  Microsoft Public License, please send an email to
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
 //  by the terms of the Microsoft Public License.
 // ----------------------------------------------------------------------------------------------
 // You must not remove this notice, or any other, from this software.
@@ -36,7 +36,7 @@ namespace AsyncAwait
 
             Info ("Starting test run...");
 
-            // Starting test runs with different variants of 
+            // Starting test runs with different variants of
             // synchronization contexts and continueOnCapturedContext
 
             RunTestCase (defaultContext     , continueOnCapturedContext:true    );
@@ -51,7 +51,7 @@ namespace AsyncAwait
 
         static void RunTestCase (SynchronizationContextDelegate contextCreator, bool continueOnCapturedContext)
         {
-            var thread = 
+            var thread =
                 new Thread (() => TestCase (contextCreator, continueOnCapturedContext))
                 {
                     Name                = "Test case"   ,
@@ -59,7 +59,7 @@ namespace AsyncAwait
                 };
 
             thread.SetApartmentState (ApartmentState.STA);
-            
+
             thread.Start ();
 
             var completed = thread.Join (TimeSpan.FromSeconds (1));
@@ -81,10 +81,10 @@ namespace AsyncAwait
             var description = context != null ? context.GetType ().Name : "Null" ;
             Info (
                 "ContinueOnCapturedContext={0} and context={1}".FormatWith (
-                    continueOnCapturedContext   , 
+                    continueOnCapturedContext   ,
                     description                 ));
 
-            try 
+            try
             {
                 var task = ReadTextTask (continueOnCapturedContext);
 

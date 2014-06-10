@@ -1,10 +1,10 @@
 ﻿// ----------------------------------------------------------------------------------------------
 // Copyright (c) Mårten Rånge.
 // ----------------------------------------------------------------------------------------------
-// This source code is subject to terms and conditions of the Microsoft Public License. A 
-// copy of the license can be found in the License.html file at the root of this distribution. 
-// If you cannot locate the  Microsoft Public License, please send an email to 
-// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+// This source code is subject to terms and conditions of the Microsoft Public License. A
+// copy of the license can be found in the License.html file at the root of this distribution.
+// If you cannot locate the  Microsoft Public License, please send an email to
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
 //  by the terms of the Microsoft Public License.
 // ----------------------------------------------------------------------------------------------
 // You must not remove this notice, or any other, from this software.
@@ -18,12 +18,42 @@ open System.Diagnostics
 open System.IO
 open System.Threading
 open System.Threading.Tasks
+open System.Runtime.InteropServices
+
+module internal Win32 =
+    [<DllImport("ole32.dll")>]
+    extern int CoWaitForMultipleHandles(    UInt32          dwFlags     ,
+                                            UInt32          dwTimeout   ,
+                                            UInt32          cHandles    ,
+                                            nativeint []    pHandles    ,
+                                            [<Out>] UInt32& lpdwindex   )
+    let COWAIT_WAITALL                      = 0x01u
+    let COWAIT_ALERTABLE                    = 0x02u
+    let COWAIT_INPUTAVAILABLE               = 0x04u
+    let COWAIT_DISPATCH_CALLS               = 0x08u
+    let COWAIT_DISPATCH_WINDOW_MESSAGES     = 0X10u
+
+
+    let waitForMultipleHandles (whs : WaitHandle[]) =
+        // TODO: Use AddRef/Release in order to make sure handles are valid
+        let pHandles            = whs |> Array.map (fun wh -> wh.SafeWaitHandle.DangerousGetHandle ())
+        let flags               = COWAIT_ALERTABLE ||| COWAIT_DISPATCH_CALLS ||| COWAIT_DISPATCH_WINDOW_MESSAGES
+        let mutable dwindex     = 0u
+        let hr = CoWaitForMultipleHandles(
+                                            flags                   ,
+                                            UInt32.MaxValue         ,
+                                            uint32 pHandles.Length  ,
+                                            pHandles                ,
+                                            &dwindex                )
+        if hr = 0 then int dwindex else -1
+
 
 [<AutoOpen>]
-module Utils =
+module internal Utils =
+
     let TraceException (ex : #exn) = Trace.WriteLine <| sprintf "Async2 caught exception: %A" ex
 
-    let Dispose (d : #IDisposable) : unit = 
+    let Dispose (d : #IDisposable) : unit =
         try
             d.Dispose ()
         with
@@ -50,7 +80,7 @@ type Async2ThreadContext(threadId : int, threadName : string) =
     //  [<ThreadStatic>] utilizes thread-local storage to give us a new unique context per thread
     [<ThreadStatic>] [<DefaultValue>] static val mutable private context : Async2ThreadContext
 
-    static member Current = 
+    static member Current =
         if Async2ThreadContext.context = Unchecked.defaultof<_> then
             let thread = Thread.CurrentThread
             Async2ThreadContext.context <- Async2ThreadContext (thread.ManagedThreadId, thread.Name |> DefaultTo "<NULL>")
@@ -71,14 +101,14 @@ type Async2ThreadContext(threadId : int, threadName : string) =
     member x.CheckCallingThread () =
         let thread = Thread.CurrentThread
         if threadId <> thread.ManagedThreadId then
-            failwith 
+            failwith
                 "Async2 context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
                 threadId
                 threadName
                 thread.ManagedThreadId
                 thread.Name
 
-    member private x.CleanUpContexts () = 
+    member private x.CleanUpContexts () =
         let kvs = contexts |> Seq.toArray
         for kv in kvs do
             if kv.Value.Target = null then
@@ -88,23 +118,26 @@ type Async2ThreadContext(threadId : int, threadName : string) =
         x.CheckCallingThread ()
         try
             try
-                let waitHandles = 
-                    contexts 
-                    |> Seq.map (fun kv -> kv.Value.Target) 
+                let waitHandles =
+                    contexts
+                    |> Seq.map (fun kv -> kv.Value.Target)
                     |> Seq.cast<Async2Context>
                     |> Seq.collect (fun ac -> ac.WaitHandles)
-                    |> Seq.toArray 
+                    |> Seq.toArray
 
                 if waitHandles.Length > 0 then
-                    let whs = 
-                        waitHandles 
+                    let whs =
+                        waitHandles
                         |> Array.map (fun (_, wh,_) -> wh)
-                    let result = WaitHandle.WaitAny whs
+//                    let result = WaitHandle.WaitAny whs
+                    let result = Win32.waitForMultipleHandles whs
+                    if result < 0 then
+                        failwith "Win32.waitForMultipleHandles failed"
                     let id, wh, a = waitHandles.[result]
                     a (id, None)
-            with 
+            with
                 | e ->  TraceException e
-                        reraise () 
+                        reraise ()
         finally
             x.CleanUpContexts ()
 
@@ -121,7 +154,7 @@ and Async2Context(threadContext : Async2ThreadContext) as this =
         member x.Dispose () = threadContext.UnregisterContext id
 
 
-    static member New () = 
+    static member New () =
         let threadContext = Async2ThreadContext.Current
         new Async2Context(threadContext)
 
@@ -129,12 +162,12 @@ and Async2Context(threadContext : Async2ThreadContext) as this =
     member x.ThreadContext = threadContext
 
     member x.WaitHandles =
-        waitHandles 
+        waitHandles
         |> Seq.map (fun kv -> let wh,a = kv.Value in kv.Key,wh,a)
 
     // Registers a WaitHandle async2 will wait upon whenever the owning thread goes idle
     //  Call signal when WaitHandle is signalled or cancelled
-    member x.RegisterWaitHandle (waitHandle : WaitHandle) (signal : int*CancelReason option->unit) : unit =   
+    member x.RegisterWaitHandle (waitHandle : WaitHandle) (signal : int*CancelReason option->unit) : unit =
         if waitHandle = null then failwith "waitHandle must not be null"
         threadContext.CheckCallingThread ()
         last <- last + 1
@@ -142,7 +175,7 @@ and Async2Context(threadContext : Async2ThreadContext) as this =
 
     // Unregisters a WaitHandle
     //  Doesn't raise cancel action
-    member x.UnregisterWaitHandle (i : int) : unit = 
+    member x.UnregisterWaitHandle (i : int) : unit =
         threadContext.CheckCallingThread ()
         ignore <| waitHandles.Remove i
 
@@ -154,10 +187,10 @@ and Async2Context(threadContext : Async2ThreadContext) as this =
         waitHandles.Clear ()
         let cro = Some cr
         for kv in kvs do
-            try 
+            try
                 let _, a = kv.Value
                 a (kv.Key, cro)
-            with 
+            with
                 | e -> TraceException e
 
     // Waits until one WaitHandle is signalled
@@ -175,28 +208,28 @@ module Async2 =
     // Extended
 
     // Used to create Async2 workflow from continuation functions
-    let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) -> 
+    let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) ->
         ctx.ThreadContext.CheckCallingThread ()
         f ctx comp exe canc
 
-    // Awaits a WaitHandle, if await is successful computes a value 
-    let inline AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> = 
+    // Awaits a WaitHandle, if await is successful computes a value
+    let AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
-            let signal (id, cro) = 
+            let signal (id, cro) =
                 ctx.UnregisterWaitHandle id
-                if disposeHandle then 
+                if disposeHandle then
                     Dispose waitHandle
                 match cro with
-                | Some cr   -> canc cr 
+                | Some cr   -> canc cr
                 | _         -> comp <| a ()
             ctx.RegisterWaitHandle waitHandle signal
 
-    // Awaits a WaitHandle 
-    let AwaitWaitHandle (disposeHandle : bool) (waitHandle : WaitHandle) : Async2<unit> = 
+    // Awaits a WaitHandle
+    let AwaitWaitHandle (disposeHandle : bool) (waitHandle : WaitHandle) : Async2<unit> =
         AwaitWaitHandleAndDo disposeHandle waitHandle <| fun () -> ()
 
     // Awaits a task
-    let AwaitTask (task : Task<'T>) : Async2<'T> = 
+    let AwaitTask (task : Task<'T>) : Async2<'T> =
         let ar : IAsyncResult = upcast task
         AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> task.Result
 
@@ -210,24 +243,24 @@ module Async2 =
         AwaitWaitHandleAndDo true evt <| fun () -> !result
 
     // Cancels a workflow
-    let Cancel (state : obj) : Async2<unit> = 
+    let Cancel (state : obj) : Async2<unit> =
         FromContinuations <| fun ctx comp exe canc ->
             canc <| UserCancelled state
 
     // Starts an Async2 workflow on current thread
-    let Start (f : Async2<'T>) comp exe canc : unit =  
+    let Start (f : Async2<'T>) comp exe canc : unit =
         use ctx = Async2Context.New ()
         try
             f (ctx, comp, exe, canc)
             ctx.WaitOnHandles ()
         with
-        | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected 
+        | e ->  ctx.CancelAllWaitHandles UnrecoverableErrorDetected
                 exe e
 
-    
+
     // Starts an Async2 workflow on new thread
     let StartNewThread (apartmentState : ApartmentState) (f : Async2<'T>) comp exe canc : Thread =
-        let start  = ThreadStart (fun () -> Start f comp exe canc)  
+        let start  = ThreadStart (fun () -> Start f comp exe canc)
         let thread = Thread (start)
         thread.IsBackground <- true
         thread.SetApartmentState apartmentState
@@ -235,7 +268,7 @@ module Async2 =
         thread
 
     // Starts an Async2 workflow inside an Async2 workflow, note that the child workflow will share the same thread
-    let StartChild (f : Async2<'T>) : Async2<Async2<'T>> = 
+    let StartChild (f : Async2<'T>) : Async2<Async2<'T>> =
         FromContinuations <| fun ctx comp exe canc ->
             let continuation= ref None
             let value       = ref None
@@ -246,7 +279,7 @@ module Async2 =
                 | Some v    -> ccomp v
                 | _         -> ()
 
-            let fcomp v = 
+            let fcomp v =
                 value := Some v
                 match !continuation with
                 | Some ccomp    -> ccomp v
@@ -259,33 +292,33 @@ module Async2 =
     // Computation expression support
 
     // Bind is invoked by let!, do!
-    let Bind (f : Async2<'T>) (s : 'T->Async2<'U>) : Async2<'U> = 
+    let Bind (f : Async2<'T>) (s : 'T->Async2<'U>) : Async2<'U> =
         FromContinuations <| fun ctx comp exe canc ->
-            let fcomp (v : 'T) : unit = 
+            let fcomp (v : 'T) : unit =
                 let ss = s v
                 ss (ctx, comp, exe, canc)
             f (ctx, fcomp, exe, canc)
 
     // Combine is used when sequencing in computation expressions
-    let Combine (f : Async2<unit>) (s : Async2<'T>) : Async2<'T> = 
+    let Combine (f : Async2<unit>) (s : Async2<'T>) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
-            let fcomp () : unit = 
+            let fcomp () : unit =
                 s (ctx, comp, exe, canc)
             f (ctx, fcomp, exe, canc)
 
     // Wraps a computation expression as a function
-    let Delay func : Async2<'T> = 
+    let Delay func : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
             func () (ctx, comp, exe, canc)
 
     // For is invoked by for .. do
-    let For (vs : seq<'T>) (b : 'T->Async2<unit>) : Async2<unit> = 
+    let For (vs : seq<'T>) (b : 'T->Async2<unit>) : Async2<unit> =
         FromContinuations <| fun ctx comp exe canc ->
             let e = vs.GetEnumerator ()
-            let bexe (ex : exn)  : unit = 
+            let bexe (ex : exn)  : unit =
                 Dispose e
                 exe ex
-            let bcanc (cr : CancelReason) : unit = 
+            let bcanc (cr : CancelReason) : unit =
                 Dispose e
                 canc cr
             let rec bcomp ()  : unit =
@@ -293,16 +326,16 @@ module Async2 =
                     let bb = b e.Current
                     bb (ctx, bcomp, bexe, bcanc)
 
-                else 
+                else
                     Dispose e
                     comp ()
-            try 
+            try
                 bcomp ()
-            with 
+            with
             | ex -> bexe ex
 
     // Return is invoked by return
-    let Return (v : 'T) : Async2<'T> = 
+    let Return (v : 'T) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
             comp v
 
@@ -310,20 +343,20 @@ module Async2 =
     let ReturnFrom v : Async2<'T> = v
 
     // Runs a workflow
-    let Run (f : Async2<'T>) : Async2<'T> = 
+    let Run (f : Async2<'T>) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
             f (ctx, comp, exe, canc)
 
     // Invoked by try..finally
-    let TryFinally (b : Async2<'T>) (f : unit->unit) : Async2<'T> = 
+    let TryFinally (b : Async2<'T>) (f : unit->unit) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
-            let bcomp (v : 'T)  : unit = 
+            let bcomp (v : 'T)  : unit =
                 f ()
                 comp v
-            let bexe (ex : exn) : unit = 
+            let bexe (ex : exn) : unit =
                 f ()
                 exe ex
-            let bcanc (cr : CancelReason): unit = 
+            let bcanc (cr : CancelReason): unit =
                 f ()
                 canc cr
             try
@@ -332,9 +365,9 @@ module Async2 =
             | e -> bexe e
 
     // Invoked by try..with
-    let TryWith (f : Async2<'T>) (e : exn->Async2<'T>) : Async2<'T> = 
+    let TryWith (f : Async2<'T>) (e : exn->Async2<'T>) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
-            let fexe (ex : exn)  : unit = 
+            let fexe (ex : exn)  : unit =
                 let ee = e ex
                 ee (ctx, comp, exe, canc)
             try
@@ -344,15 +377,15 @@ module Async2 =
 
 
     // Invoked by use
-    let Using<'T, 'U when 'T :> IDisposable> (v : 'T) (f : 'T->Async2<'U>) : Async2<'U> = 
+    let Using<'T, 'U when 'T :> IDisposable> (v : 'T) (f : 'T->Async2<'U>) : Async2<'U> =
         FromContinuations <| fun ctx comp exe canc ->
-            let fcomp (u : 'U)  : unit = 
+            let fcomp (u : 'U)  : unit =
                 Dispose v
                 comp u
-            let fexe (ex : exn) : unit = 
+            let fexe (ex : exn) : unit =
                 Dispose v
                 exe ex
-            let fcanc (cr : CancelReason): unit = 
+            let fcanc (cr : CancelReason): unit =
                 Dispose v
                 canc cr
             try
@@ -362,22 +395,22 @@ module Async2 =
             | e -> fexe e
 
     // Invoked by while..do
-    let While (t : unit->bool) (b : Async2<unit>) : Async2<unit> = 
+    let While (t : unit->bool) (b : Async2<unit>) : Async2<unit> =
         FromContinuations <| fun ctx comp exe canc ->
-            let rec bcomp ()  : unit = 
+            let rec bcomp ()  : unit =
                 if t () then
                     b (ctx, bcomp, exe, canc)
-                else 
+                else
                     comp ()
-            bcomp () 
-    
+            bcomp ()
+
     // Invoked by empty else branches
-    let Zero () : Async2<unit> = 
+    let Zero () : Async2<unit> =
         FromContinuations <| fun ctx comp exe canc ->
             comp ()
 
 // The computation expression builder
-type Async2Builder() = 
+type Async2Builder() =
         member x.Bind(f, s)         = Async2.Bind f s
         member x.Combine(f, s)      = Async2.Combine f s
         member x.Delay(func)        = Async2.Delay func
@@ -394,7 +427,7 @@ type Async2Builder() =
         member x.Zero()             = Async2.Zero ()
 
 
-[<AutoOpen>]                    
+[<AutoOpen>]
 module Async2AutoOpen =
     let async2 = Async2Builder()
 

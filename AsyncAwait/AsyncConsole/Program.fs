@@ -1,10 +1,10 @@
 ﻿// ----------------------------------------------------------------------------------------------
 // Copyright (c) Mårten Rånge.
 // ----------------------------------------------------------------------------------------------
-// This source code is subject to terms and conditions of the Microsoft Public License. A 
-// copy of the license can be found in the License.html file at the root of this distribution. 
-// If you cannot locate the  Microsoft Public License, please send an email to 
-// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+// This source code is subject to terms and conditions of the Microsoft Public License. A
+// copy of the license can be found in the License.html file at the root of this distribution.
+// If you cannot locate the  Microsoft Public License, please send an email to
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
 //  by the terms of the Microsoft Public License.
 // ----------------------------------------------------------------------------------------------
 // You must not remove this notice, or any other, from this software.
@@ -24,7 +24,7 @@ let info (msg : string) =
 let error (msg : string) =
     printfn "ERROR : %s" msg
 
-let dispose o = 
+let dispose o =
     try
         match o :> obj with
         | :? IDisposable as d -> d.Dispose()
@@ -41,8 +41,8 @@ let AwaitTask2 (task : Task<'T>) : Async<'T> =
     if awaiter.IsCompleted then
         async.Return <| awaiter.GetResult()
     else
-        Async.FromContinuations <| fun (continuation, _, _) -> 
-            awaiter.OnCompleted <| Action(fun () -> 
+        Async.FromContinuations <| fun (continuation, _, _) ->
+            awaiter.OnCompleted <| Action(fun () ->
                 let result = awaiter.GetResult()
                 continuation result
                 )
@@ -67,14 +67,14 @@ let readingFilesAsync (description : string) (fileName : string) =
         do! Async.SwitchToContext SynchronizationContext.Current
 
         let after   = Thread.CurrentThread.ManagedThreadId
-        
+
         if before <> after then
             info <| sprintf "%s - Race condition detected" description
     }
 
-let testCase 
-    (description    : string                        ) 
-    (contextCreator : unit -> SynchronizationContext) 
+let testCase
+    (description    : string                        )
+    (contextCreator : unit -> SynchronizationContext)
     (runner         : Async<unit> -> unit           ) =
 
     let previous    = SynchronizationContext.Current
@@ -82,7 +82,7 @@ let testCase
 
     SynchronizationContext.SetSynchronizationContext context
 
-    let myTask = 
+    let myTask =
         async {
             try
                 let! test = readingFilesAsync description "SomeText.txt"
@@ -95,9 +95,9 @@ let testCase
     runner myTask
     ()
 
-let runTestCase 
-    (description    : string                        ) 
-    (contextCreator : unit -> SynchronizationContext) 
+let runTestCase
+    (description    : string                        )
+    (contextCreator : unit -> SynchronizationContext)
     (runner         : Async<unit> -> unit           ) =
     let threadStart     = ThreadStart(fun () -> testCase description contextCreator runner)
     let thread          = Thread (threadStart)
@@ -115,17 +115,17 @@ let runTestCase
 
 [<EntryPoint>]
 [<STAThread>]
-let main argv = 
+let main argv =
     Environment.CurrentDirectory <- AppDomain.CurrentDomain.BaseDirectory
 
-    let synchronizationContexts : (string*(unit->SynchronizationContext)) list = 
+    let synchronizationContexts : (string*(unit->SynchronizationContext)) list =
         [
             "Default"       , fun () -> null
-            "WindowsForms"  , fun () -> upcast new WindowsFormsSynchronizationContext () 
-            "Dispatcher"    , fun () -> upcast new DispatcherSynchronizationContext () 
+            "WindowsForms"  , fun () -> upcast new WindowsFormsSynchronizationContext ()
+            "Dispatcher"    , fun () -> upcast new DispatcherSynchronizationContext ()
         ]
 
-    let asyncRunners : (string*(Async<unit>->unit)) list = 
+    let asyncRunners : (string*(Async<unit>->unit)) list =
         [
             "SameThread"    , fun a -> Async.StartImmediate a
             "ThreadPool"    , fun a -> Async.Start a
