@@ -13,6 +13,9 @@
 open System
 open System.IO
 open System.Threading
+open System.Threading.Tasks
+open System.Windows
+open System.Windows.Controls
 
 open mrange
 
@@ -23,8 +26,12 @@ let readText (fileName : string) =
         return text
     }
 
-let composite (sc : SynchronizationContext) =
+let composite =
     async2 {
+        
+        // Inserts a delay to visualize UI doesn't get blocked
+        do! Async2.AwaitUnitTask <| Task.Delay 2000
+
         let! x = Async2.StartChild <| readText "SomeText.txt"
         let! y = Async2.StartChild <| readText "SomeOtherText.txt"
 
@@ -32,8 +39,6 @@ let composite (sc : SynchronizationContext) =
         let! yy = y
 
         let zz = xx + " " + yy
-
-        do! Async2.AwaitSwitchToContext sc <| fun () -> printfn "Result: %s" zz
 
         return zz
     }
@@ -45,13 +50,36 @@ let main argv =
 
     ignore <| Async2Test.runTestCases ()
 
-    let comp (v : 'T)   : unit =
-        printfn "Operation completed: %A" v
-    let exe (ex : exn)  : unit =
-        printfn "Exception was raised: %A" ex.Message
-    let canc (cr : CancelReason) : unit =
-        printfn "Operation cancelled: %A" cr
+    let button              = Button ()
+    button.Content          <- "Go!"
+    button.Padding          <- Thickness(8.)
+    button.Margin           <- Thickness(4.)
+    button.Width            <- 128.
+    button.Height           <- 32.
+    button.Click.Add (fun e -> ())
 
-    let t = Async2.StartNewThread ApartmentState.STA (composite SynchronizationContext.Current) comp exe canc
-    t.Join ()
+    let text                = TextBlock ()
+
+    let onClick e           =
+        let comp (v : string)   : unit =
+            text.Text <- v
+        let exe (ex : exn)  : unit =
+            printfn "Exception was raised: %A" ex.Message
+        let canc (cr : CancelReason) : unit =
+            printfn "Operation cancelled: %A" cr
+
+        Async2.Start composite comp exe canc
+
+    button.Click.Add onClick
+
+    let stackPanel          = StackPanel ()
+    ignore <| stackPanel.Children.Add button
+    ignore <| stackPanel.Children.Add text
+
+    let window = Window ()
+    window.MinWidth <- 640.
+    window.MinHeight <- 400.
+    window.Content <- stackPanel
+    ignore <| window.ShowDialog ()
+
     0

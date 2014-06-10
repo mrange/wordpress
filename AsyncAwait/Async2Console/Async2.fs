@@ -21,12 +21,14 @@ open System.Threading.Tasks
 open System.Runtime.InteropServices
 
 module internal Win32 =
+
     [<DllImport("ole32.dll")>]
     extern int CoWaitForMultipleHandles(    UInt32          dwFlags     ,
                                             UInt32          dwTimeout   ,
                                             UInt32          cHandles    ,
                                             nativeint []    pHandles    ,
                                             [<Out>] UInt32& lpdwindex   )
+
     let COWAIT_WAITALL                      = 0x01u
     let COWAIT_ALERTABLE                    = 0x02u
     let COWAIT_INPUTAVAILABLE               = 0x04u
@@ -70,6 +72,7 @@ type CancelReason =
     | TokenCancelled of CancellationToken
     | UserCancelled of obj
 
+exception CancelException of CancelReason
 
 type Async2ThreadContext(threadId : int, threadName : string) =
 
@@ -205,15 +208,13 @@ type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->uni
 
 module Async2 =
 
-    // Extended
-
     // Used to create Async2 workflow from continuation functions
     let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) ->
         ctx.ThreadContext.CheckCallingThread ()
         f ctx comp exe canc
 
     // Awaits a WaitHandle, if await is successful computes a value
-    let AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> =
+    let inline internal AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
             let signal (id, cro) =
                 ctx.UnregisterWaitHandle id
@@ -229,9 +230,14 @@ module Async2 =
         AwaitWaitHandleAndDo disposeHandle waitHandle <| fun () -> ()
 
     // Awaits a task
+    let AwaitUnitTask (task : Task) : Async2<unit> =
+        let ar : IAsyncResult = upcast task
+        AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> Debug.Assert task.IsCompleted; task.Wait ()
+
+    // Awaits a task
     let AwaitTask (task : Task<'T>) : Async2<'T> =
         let ar : IAsyncResult = upcast task
-        AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> task.Result
+        AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> Debug.Assert task.IsCompleted; task.Result
 
     // Performs a switch to captured SynchronizationContext and awaits the result
     let AwaitSwitchToContext (sc : SynchronizationContext) (a : unit->'T) : Async2<'T> =
