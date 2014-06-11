@@ -30,7 +30,7 @@ let readText (fileName : string) =
 
 let composite =
     async2 {
-        
+
         // Inserts a delay to visualize UI doesn't get blocked
         do! Async2.AwaitUnitTask <| Task.Delay 2000
 
@@ -73,10 +73,10 @@ let main argv =
 
         let i = !id
 
-        let comp v = 
+        let comp v =
             ignore <| sb.AppendLine (i.ToString() + " " + v)
             text.Text <- sb.ToString ()
-            
+
         Async2Windows.Start dispatcher composite comp
 
     button.Click.Add onClick

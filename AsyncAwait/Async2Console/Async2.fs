@@ -68,7 +68,7 @@ module internal InternalUtils =
 
 [<AbstractClass>]
 type BaseDisposable() =
-    
+
     let mutable isDisposed = 0
 
     interface IDisposable with
@@ -113,7 +113,7 @@ type Async2Context(threadId : int, threadName : string) as this =
     override x.OnDispose () =
         continuations.Clear ()
 
-    member x.IsAwaiting = 
+    member x.IsAwaiting =
         if x.IsDisposed then false
         else continuations.Count > 0
 
@@ -452,7 +452,7 @@ type Async2Builder() =
 module Async2AutoOpen =
     let async2 = Async2Builder()
 
-module Async2Windows = 
+module Async2Windows =
     open System.Windows
     open System.Windows.Threading
 
@@ -464,10 +464,10 @@ module Async2Windows =
 
             let del = Action
                         (
-                            fun () -> 
+                            fun () ->
                                 try
                                     a ()
-                                with 
+                                with
                                 | ex -> TraceException ex
                         )
 
@@ -486,14 +486,14 @@ module Async2Windows =
 
     type internal Async2DispatcherJob<'T>
         (
-            a       : Async2<'T>        , 
-            comp    : 'T->unit          , 
-            exe     : exn->unit         , 
+            a       : Async2<'T>        ,
+            comp    : 'T->unit          ,
+            exe     : exn->unit         ,
             canc    : CancelReason->unit
         ) as this =
         inherit Async2DispatcherJob(Async2Context.New ())
 
-        let mcomp v = 
+        let mcomp v =
             try
                 try
                     comp v
@@ -502,16 +502,16 @@ module Async2Windows =
             finally
                 Dispose this
 
-        let mexe ex = 
+        let mexe ex =
             try
                 try
-                    exe ex 
+                    exe ex
                 with
                 | ex -> TraceException ex
             finally
                 Dispose this
 
-        let mcanc cr = 
+        let mcanc cr =
             try
                 try
                     canc cr
@@ -520,12 +520,12 @@ module Async2Windows =
             finally
                 Dispose this
 
-        do 
+        do
             try
                 a (this.Context, mcomp, mexe, mcanc)
             with
             | ex -> exe ex
-    
+
     type internal Async2DispatcherContext(threadId : int, threadName : string) =
 
         let jobs                    = System.Collections.Generic.List<Async2DispatcherJob> ()
@@ -561,7 +561,7 @@ module Async2Windows =
 
             x.ProcessJobs ()
 
-        member x.ProcessJobs () = 
+        member x.ProcessJobs () =
             x.CheckCallingThread ()
 
             if not isProcessing then
@@ -584,29 +584,29 @@ module Async2Windows =
                             let id, wh, a = waitHandles.[result]
                             a (id, None)
 
-                            ignore <| jobs.RemoveAll (Predicate (fun job -> 
+                            ignore <| jobs.RemoveAll (Predicate (fun job ->
                                 if job.Context.IsAwaiting then false
                                 else
                                     Dispose job
                                     true
                                 ))
-                            
+
                             if jobs.Count > 0 then
                                 DispatchOnIdle Dispatcher.CurrentDispatcher x.ProcessJobs
 
-                            
+
                     with
                     | ex ->  TraceException ex
                 finally
                     isProcessing <- false
 
-    // Starts an Async2 workflow 
+    // Starts an Async2 workflow
     let StartWithContinuations (d : Dispatcher) (f : Async2<'T>) comp exe canc : unit =
-        DispatchOnIdle d <| fun () -> 
+        DispatchOnIdle d <| fun () ->
             let job = new Async2DispatcherJob<'T>(f, comp, exe,canc)
             Async2DispatcherContext.Current.AddJob job
 
-    // Starts an Async2 workflow 
+    // Starts an Async2 workflow
     let Start (d : Dispatcher) (f : Async2<'T>) comp : unit =
         StartWithContinuations d f comp DefaultException DefaultCancel
 
