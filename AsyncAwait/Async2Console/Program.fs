@@ -74,7 +74,7 @@ let main argv =
 
         let i = !id
 
-        let v = Async2.Start composite 
+        let v = Async2.StartImmediate composite 
 
         ignore <| sb.AppendLine (i.ToString() + " " + v)
         text.Text <- sb.ToString ()
