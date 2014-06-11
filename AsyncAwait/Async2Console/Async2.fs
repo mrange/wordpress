@@ -106,6 +106,7 @@ type Async2Context(threadId : int, threadName : string) as this =
     let continuations   = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
     let mutable last    = 0
 
+    // Creates a new Async2Context
     static member New () =
         let thread = Thread.CurrentThread
         new Async2Context(thread.ManagedThreadId, thread.Name |> DefaultTo "<NULL>")
@@ -113,6 +114,7 @@ type Async2Context(threadId : int, threadName : string) as this =
     override x.OnDispose () =
         continuations.Clear ()
 
+    // Returns true if there are continuations being awaited
     member x.IsAwaiting =
         if x.IsDisposed then false
         else continuations.Count > 0
@@ -129,22 +131,22 @@ type Async2Context(threadId : int, threadName : string) as this =
                 thread.ManagedThreadId
                 thread.Name
 
-    member x.WaitHandles =
+    // Returns the awaited continuations
+    member x.Continuations =
         if x.IsDisposed then Seq.empty
         else
             continuations
             |> Seq.map (fun kv -> let wh,a = kv.Value in kv.Key,wh,a)
 
-    // Registers a WaitHandle async2 will wait upon whenever the owning thread goes idle
+    // Registers a continuation
     //  Call signal when WaitHandle is signalled or cancelled
-    member x.RegisterWaitHandle (waitHandle : WaitHandle) (signal : int*CancelReason option->unit) : unit =
-        if waitHandle = null then failwith "waitHandle must not be null"
+    member x.RegisterContinuation (waitHandle : WaitHandle) (continuation : int*CancelReason option->unit) : unit =
         x.CheckCallingThread ()
         if x.IsDisposed then ()
         last <- last + 1
-        continuations.Add (last, (waitHandle, signal))
+        continuations.Add (last, (waitHandle, continuation))
 
-    // Unregisters a WaitHandle
+    // Unregisters a continuation
     //  Doesn't raise cancel action
     member x.UnregisterWaitHandle (i : int) : unit =
         x.CheckCallingThread ()
@@ -153,7 +155,7 @@ type Async2Context(threadId : int, threadName : string) as this =
 
     // Cancels all WaitHandles
     //  Raises cancel actions
-    member x.CancelAllWaitHandles (cr : CancelReason) : unit =
+    member x.CancelAllContinuations (cr : CancelReason) : unit =
         x.CheckCallingThread ()
         if x.IsDisposed then ()
         let kvs = continuations |> Seq.toArray
@@ -166,29 +168,27 @@ type Async2Context(threadId : int, threadName : string) as this =
             with
             | ex -> TraceException ex
 
-    // Waits until one WaitHandle is signalled
-    //  Raises the signal on said handle
-    member x.WaitOnHandles () : unit =
+    // Awaits until no more continuations remains
+    member x.AwaitAllContinuations () : unit =
         x.CheckCallingThread ()
         if x.IsDisposed then ()
         try
             while continuations.Count > 0 do
-                let waitHandles =
+                let cs =
                     continuations
                     |> Seq.map (fun kv -> kv)
                     |> Seq.toArray
 
-                let whs =
-                    waitHandles
+                let waitHandles =
+                    cs
                     |> Array.map (fun kv -> let (wh, _) = kv.Value in wh)
-                let result = WaitHandle.WaitAny whs
-                let kv      = waitHandles.[result]
+                let result = WaitHandle.WaitAny waitHandles
+                let kv      = cs.[result]
                 let wh, a   = kv.Value
                 a (kv.Key, None)
         with
         | ex -> TraceException ex
                 reraise ()
-
 
 type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->unit
 
@@ -202,14 +202,14 @@ module Async2 =
     // Awaits a WaitHandle, if await is successful computes a value
     let inline internal AwaitWaitHandleAndDo (disposeHandle : bool) (waitHandle : WaitHandle) (a : unit->'T) : Async2<'T> =
         FromContinuations <| fun ctx comp exe canc ->
-            let signal (id, cro) =
+            let continuation (id, cro) =
                 ctx.UnregisterWaitHandle id
                 if disposeHandle then
                     Dispose waitHandle
                 match cro with
                 | Some cr   -> canc cr
                 | _         -> comp <| a ()
-            ctx.RegisterWaitHandle waitHandle signal
+            ctx.RegisterContinuation waitHandle continuation
 
     // Awaits a WaitHandle
     let AwaitWaitHandle (disposeHandle : bool) (waitHandle : WaitHandle) : Async2<unit> =
@@ -252,9 +252,9 @@ module Async2 =
         use ctx = Async2Context.New ()
         try
             f (ctx, comp, exe, canc)
-            ctx.WaitOnHandles ()
+            ctx.AwaitAllContinuations ()
         with
-        | ex -> ctx.CancelAllWaitHandles <| UnrecoverableErrorDetected ex
+        | ex -> ctx.CancelAllContinuations <| UnrecoverableErrorDetected ex
                 exe ex
 
     // Starts an Async2 workflow on the current thread
@@ -267,9 +267,9 @@ module Async2 =
 
         try
             f (ctx, comp, DefaultException, DefaultCancel)
-            ctx.WaitOnHandles ()
+            ctx.AwaitAllContinuations ()
         with
-        | ex -> ctx.CancelAllWaitHandles <| UnrecoverableErrorDetected ex
+        | ex -> ctx.CancelAllContinuations <| UnrecoverableErrorDetected ex
                 reraise ()
 
         !result
@@ -568,20 +568,20 @@ module Async2Windows =
                 isProcessing <- true
                 try
                     try
-                        let waitHandles =
+                        let continuations =
                             jobs
                             |> Seq.filter (fun job -> not job.IsDisposed)
-                            |> Seq.collect (fun job -> job.Context.WaitHandles)
+                            |> Seq.collect (fun job -> job.Context.Continuations)
                             |> Seq.toArray
 
-                        if waitHandles.Length > 0 then
-                            let whs =
-                                waitHandles
+                        if continuations.Length > 0 then
+                            let waitHandles =
+                                continuations
                                 |> Array.map (fun (_, wh,_) -> wh)
-                            let result = Win32.waitForMultipleHandles whs
+                            let result = Win32.waitForMultipleHandles waitHandles
                             if result < 0 then
                                 failwith "Win32.waitForMultipleHandles failed"
-                            let id, wh, a = waitHandles.[result]
+                            let id, wh, a = continuations.[result]
                             a (id, None)
 
                             ignore <| jobs.RemoveAll (Predicate (fun job ->
@@ -609,6 +609,3 @@ module Async2Windows =
     // Starts an Async2 workflow
     let Start (d : Dispatcher) (f : Async2<'T>) comp : unit =
         StartWithContinuations d f comp DefaultException DefaultCancel
-
-
-
