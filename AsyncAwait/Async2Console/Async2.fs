@@ -51,7 +51,7 @@ module internal Win32 =
 
 
 [<AutoOpen>]
-module internal Utils =
+module internal InternalUtils =
 
     let TraceException (ex : #exn) = Trace.WriteLine <| sprintf "Async2 caught exception: %A" ex
 
@@ -63,6 +63,8 @@ module internal Utils =
 
     let DefaultSynchronizationContext = SynchronizationContext ()
     let DefaultTo<'T when 'T : null> (v : 'T) (d : 'T) = if obj.ReferenceEquals (v, null) then d else v
+
+    let Nop v = Unchecked.defaultof<_>
 
 [<AbstractClass>]
 type BaseDisposable() =
@@ -90,30 +92,30 @@ type CancelReason =
 
 exception CancelException of CancelReason
 
-type Async2ThreadContext(threadId : int, threadName : string) =
+[<AutoOpen>]
+module PublicUtils =
 
-    let contexts = Dictionary<int, WeakReference>()
-    let mutable last            = 0
+    let Nop v = Unchecked.defaultof<_>
 
-    // Async2ThreadContext is thread-affine which means it's associated with a particular thread
-    //  [<ThreadStatic>] utilizes thread-local storage to give us a new unique context per thread
-    [<ThreadStatic>] [<DefaultValue>] static val mutable private context : Async2ThreadContext
+    let DefaultException e  = raise e
+    let DefaultCancel cr    = raise <| CancelException cr
 
-    static member Current =
-        if Async2ThreadContext.context = Unchecked.defaultof<_> then
-            let thread = Thread.CurrentThread
-            Async2ThreadContext.context <- Async2ThreadContext (thread.ManagedThreadId, thread.Name |> DefaultTo "<NULL>")
-        Async2ThreadContext.context
+type Async2Context(threadId : int, threadName : string) as this =
+    inherit BaseDisposable()
 
-    member x.RegisterContext (ctx : Async2Context) =
-        x.CheckCallingThread ()
-        last <- last + 1
-        contexts.Add (last, WeakReference(ctx))
-        last
+    let continuations   = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
+    let mutable last    = 0
 
-    member x.UnregisterContext (id : int) =
-        x.CheckCallingThread ()
-        ignore <| contexts.Remove id
+    static member New () =
+        let thread = Thread.CurrentThread
+        new Async2Context(thread.ManagedThreadId, thread.Name |> DefaultTo "<NULL>")
+
+    override x.OnDispose () =
+        continuations.Clear ()
+
+    member x.IsAwaiting = 
+        if x.IsDisposed then false
+        else continuations.Count > 0
 
     // Checks if the calling thread is the same as the thread owning the Async2Context
     //  Used to detect unintended thread-switches
@@ -121,98 +123,41 @@ type Async2ThreadContext(threadId : int, threadName : string) =
         let thread = Thread.CurrentThread
         if threadId <> thread.ManagedThreadId then
             failwith
-                "Async2 context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
+                "Async2Context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
                 threadId
                 threadName
                 thread.ManagedThreadId
                 thread.Name
 
-    member private x.CleanUpContexts () =
-        let kvs = contexts |> Seq.toArray
-        for kv in kvs do
-            if kv.Value.Target = null then
-                ignore <| contexts.Remove kv.Key
-
-    member internal x.WaitOnHandles () =
-        x.CheckCallingThread ()
-        try
-            try
-                let waitHandles =
-                    contexts
-                    |> Seq.map (fun kv -> kv.Value.Target)
-                    |> Seq.cast<Async2Context>
-                    |> Seq.collect (fun ac -> ac.WaitHandles)
-                    |> Seq.toArray
-
-                if waitHandles.Length > 0 then
-                    let whs =
-                        waitHandles
-                        |> Array.map (fun (_, wh,_) -> wh)
-//                    let result = WaitHandle.WaitAny whs
-                    let result = Win32.waitForMultipleHandles whs
-                    if result < 0 then
-                        failwith "Win32.waitForMultipleHandles failed"
-                    let id, wh, a = waitHandles.[result]
-                    a (id, None)
-            with
-            | ex -> TraceException ex
-                    reraise ()
-        finally
-            x.CleanUpContexts ()
-
-and Async2Context(threadContext : Async2ThreadContext) as this =
-    inherit BaseDisposable()
-
-    let waitHandles             = Dictionary<int, WaitHandle*(int*CancelReason option->unit)>()
-    let mutable last            = 0
-    let mutable id              = 0
-
-    do
-        id <- threadContext.RegisterContext this
-
-    static member New () =
-        let threadContext = Async2ThreadContext.Current
-        new Async2Context(threadContext)
-
-    override x.OnDispose () =
-        threadContext.UnregisterContext id
-        waitHandles.Clear ()
-
-    member x.ThreadContext = threadContext
-
-    member x.IsAwaiting = 
-        if x.IsDisposed then false
-        else waitHandles.Count > 0
-
     member x.WaitHandles =
         if x.IsDisposed then Seq.empty
         else
-            waitHandles
+            continuations
             |> Seq.map (fun kv -> let wh,a = kv.Value in kv.Key,wh,a)
 
     // Registers a WaitHandle async2 will wait upon whenever the owning thread goes idle
     //  Call signal when WaitHandle is signalled or cancelled
     member x.RegisterWaitHandle (waitHandle : WaitHandle) (signal : int*CancelReason option->unit) : unit =
         if waitHandle = null then failwith "waitHandle must not be null"
-        threadContext.CheckCallingThread ()
+        x.CheckCallingThread ()
         if x.IsDisposed then ()
         last <- last + 1
-        waitHandles.Add (last, (waitHandle, signal))
+        continuations.Add (last, (waitHandle, signal))
 
     // Unregisters a WaitHandle
     //  Doesn't raise cancel action
     member x.UnregisterWaitHandle (i : int) : unit =
-        threadContext.CheckCallingThread ()
+        x.CheckCallingThread ()
         if x.IsDisposed then ()
-        ignore <| waitHandles.Remove i
+        ignore <| continuations.Remove i
 
     // Cancels all WaitHandles
     //  Raises cancel actions
     member x.CancelAllWaitHandles (cr : CancelReason) : unit =
-        threadContext.CheckCallingThread ()
+        x.CheckCallingThread ()
         if x.IsDisposed then ()
-        let kvs = waitHandles |> Seq.toArray
-        waitHandles.Clear ()
+        let kvs = continuations |> Seq.toArray
+        continuations.Clear ()
         let cro = Some cr
         for kv in kvs do
             try
@@ -224,10 +169,25 @@ and Async2Context(threadContext : Async2ThreadContext) as this =
     // Waits until one WaitHandle is signalled
     //  Raises the signal on said handle
     member x.WaitOnHandles () : unit =
-        threadContext.CheckCallingThread ()
+        x.CheckCallingThread ()
         if x.IsDisposed then ()
-        while waitHandles.Count > 0 do
-            threadContext.WaitOnHandles ()
+        try
+            while continuations.Count > 0 do
+                let waitHandles =
+                    continuations
+                    |> Seq.map (fun kv -> kv)
+                    |> Seq.toArray
+
+                let whs =
+                    waitHandles
+                    |> Array.map (fun kv -> let (wh, _) = kv.Value in wh)
+                let result = WaitHandle.WaitAny whs
+                let kv      = waitHandles.[result]
+                let wh, a   = kv.Value
+                a (kv.Key, None)
+        with
+        | ex -> TraceException ex
+                reraise ()
 
 
 type Async2<'T> = Async2Context*('T->unit)*(exn->unit)*(CancelReason->unit)->unit
@@ -236,7 +196,7 @@ module Async2 =
 
     // Used to create Async2 workflow from continuation functions
     let inline FromContinuations f : Async2<'T> = fun (ctx, comp, exe, canc) ->
-        ctx.ThreadContext.CheckCallingThread ()
+        ctx.CheckCallingThread ()
         f ctx comp exe canc
 
     // Awaits a WaitHandle, if await is successful computes a value
@@ -253,7 +213,7 @@ module Async2 =
 
     // Awaits a WaitHandle
     let AwaitWaitHandle (disposeHandle : bool) (waitHandle : WaitHandle) : Async2<unit> =
-        AwaitWaitHandleAndDo disposeHandle waitHandle <| fun () -> ()
+        AwaitWaitHandleAndDo disposeHandle waitHandle Nop
 
     // Awaits a task
     let AwaitUnitTask (task : Task) : Async2<unit> =
@@ -268,9 +228,9 @@ module Async2 =
     // Awaits async workflow
     //  Checks that the continuation executes on the correct thread
     let AwaitAsync (a : Async<'T>) : Async2<'T> = fun (ctx, comp, exe, canc) ->
-        let acomp v     = ctx.ThreadContext.CheckCallingThread (); comp v
-        let aexe ex     = ctx.ThreadContext.CheckCallingThread (); exe ex
-        let acanc ex    = ctx.ThreadContext.CheckCallingThread (); canc <| UserCancelled ex
+        let acomp v     = ctx.CheckCallingThread (); comp v
+        let aexe ex     = ctx.CheckCallingThread (); exe ex
+        let acanc ex    = ctx.CheckCallingThread (); canc <| UserCancelled ex
         Async.StartWithContinuations (a, acomp, aexe, acanc)
 
     // Performs a switch to captured SynchronizationContext and awaits the result
@@ -304,11 +264,9 @@ module Async2 =
         let result = ref Unchecked.defaultof<'T>
 
         let comp v = result := v
-        let exe  e = raise e
-        let canc cr= raise <| CancelException cr
 
         try
-            f (ctx, comp, exe, canc)
+            f (ctx, comp, DefaultException, DefaultCancel)
             ctx.WaitOnHandles ()
         with
         | ex -> ctx.CancelAllWaitHandles <| UnrecoverableErrorDetected ex
@@ -589,7 +547,7 @@ module Async2Windows =
             let thread = Thread.CurrentThread
             if threadId <> thread.ManagedThreadId then
                 failwith
-                    "Async2 context may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
+                    "Async2DispatcherContext may only be called by it's owner thread (%d,%s) but was called by another thread (%d,%s)"
                     threadId
                     threadName
                     thread.ManagedThreadId
@@ -597,7 +555,7 @@ module Async2Windows =
 
         member x.AddJob (job : Async2DispatcherJob) =
             x.CheckCallingThread ()
-            job.Context.ThreadContext.CheckCallingThread ()
+            job.Context.CheckCallingThread ()
 
             jobs.Add job
 
@@ -643,9 +601,14 @@ module Async2Windows =
                     isProcessing <- false
 
     // Starts an Async2 workflow 
-    let StartOnApplicationIdle (d : Dispatcher) (f : Async2<'T>) comp exe canc : unit =
+    let StartWithContinuations (d : Dispatcher) (f : Async2<'T>) comp exe canc : unit =
         DispatchOnIdle d <| fun () -> 
             let job = new Async2DispatcherJob<'T>(f, comp, exe,canc)
             Async2DispatcherContext.Current.AddJob job
+
+    // Starts an Async2 workflow 
+    let Start (d : Dispatcher) (f : Async2<'T>) comp : unit =
+        StartWithContinuations d f comp DefaultException DefaultCancel
+
 
 

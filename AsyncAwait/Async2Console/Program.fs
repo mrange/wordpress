@@ -62,7 +62,6 @@ let main argv =
     button.Margin           <- Thickness(4.)
     button.Width            <- 128.
     button.Height           <- 32.
-    button.Click.Add (fun e -> ())
 
     let sb                  = StringBuilder ()
     let text                = TextBlock ()
@@ -74,11 +73,11 @@ let main argv =
 
         let i = !id
 
-        let v = Async2.StartImmediate composite 
-
-        ignore <| sb.AppendLine (i.ToString() + " " + v)
-        text.Text <- sb.ToString ()
-
+        let comp v = 
+            ignore <| sb.AppendLine (i.ToString() + " " + v)
+            text.Text <- sb.ToString ()
+            
+        Async2Windows.Start dispatcher composite comp
 
     button.Click.Add onClick
 
