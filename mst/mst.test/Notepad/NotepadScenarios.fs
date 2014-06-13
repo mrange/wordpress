@@ -10,16 +10,34 @@
 // You must not remove this notice, or any other, from this software.
 // ----------------------------------------------------------------------------------------------
 
+namespace mst.test
+
 open mst
-open mst.test
 
-[<EntryPoint>]
-let main argv = 
-    let run = Scenario.RunScenario Map.empty <| MSPaintScenarios.DrawShape
-    //let run = Scenario.RunScenario Map.empty <| NotepadScenarios.SimpleScenario
+open Scenario
+open Notepad
+open Windows
 
-    printfn "Printing results (no results implies success):"
-    for result in run.State.Results do
-        printfn "%A" result
+module NotepadScenarios = 
 
-    0
+    let SimpleScenario : Scenario<unit> =
+        let testdata = "Hello there!"
+        scenario {
+            do! StartNotepad 
+            
+            // Write some text to notepad and save the file
+            do! TypeText testdata
+            do! SaveFile "Hello.txt"
+
+            // Clear notepad and verify the content is empty
+            do! NewFile 
+            let! text = ReadText 
+            let! _ = ExpectEqual "" text
+
+            // Read the file again and validate the content
+            do! OpenFile "Hello.txt"
+            let! text = ReadText 
+            let! _ = ExpectEqual testdata text
+
+            return ()
+        }

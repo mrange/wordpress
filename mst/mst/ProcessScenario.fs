@@ -37,3 +37,14 @@ module ProcessScenario =
                 return! Scenario.Raise ("Failed to start: " + exePath)
         }
 
+    let GetProcess : Scenario<Process> =
+        scenario {
+            return! Scenario.GetVariable State_Process
+        }
+
+    let WaitUntilIdle : Scenario<bool> =
+        scenario {  
+            let! proc = GetProcess
+            return proc.WaitForInputIdle ()
+        }
+

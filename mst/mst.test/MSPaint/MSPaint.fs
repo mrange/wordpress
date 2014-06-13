@@ -12,10 +12,9 @@
 
 namespace mst.test
 
-open System.Windows
-
 open mst
-open mst.lowlevel
+
+open System.Windows
 
 module MSPaint = 
 
@@ -117,26 +116,3 @@ module MSPaint =
     let DrawLine        = DrawSomething "Line"
     let DrawOval        = DrawSomething "Oval"
     let DrawRectangle   = DrawSomething "Rectangle"
-
-    let ConfirmSaveAs : Scenario<unit> = 
-        scenario {
-            do! WaitForPopup (UIScenario.FocusElement <| ByName "Confirm Save As")
-            do! UIScenario.SendChar 'y' Modifier.LeftAlt
-        }
-
-    let SaveFile fileName : Scenario<unit> = 
-        scenario {
-            do! UIScenario.SendChar 'f' Modifier.LeftAlt
-            do! UIScenario.SendChar 'a' Modifier.None
-
-            do! WaitForPopup (UIScenario.SetCurrentElement <| ByName "Save As")
-
-            do! UIScenario.SetText fileName <| ById "1001"
-
-            do! UIScenario.SendChar 's' Modifier.LeftAlt
-
-            let! _ = Scenario.Optional ConfirmSaveAs
-
-            return ()
-        }
-

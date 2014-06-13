@@ -19,6 +19,8 @@ open System.Threading
 type ScenarioResult = 
     | InfoMessage       of string
     | WarningMessage    of string
+    | ExpectFailure     of string
+    | AssertFailure     of string
     | ErrorMessage      of string
     | ExceptionFailure  of Exception
 
@@ -48,10 +50,12 @@ type ScenarioRun<'T> =
     }
     static member New                   state result        = { State = state; Result = result; }
     static member Success               state result        = ScenarioRun<_>.New state (Some result)
-    static member SuccessWithInfo       state result info   = ScenarioRun<_>.New {state with Results = (InfoMessage info)::state.Results} (Some result)
-    static member SuccessWithWarning    state result warning= ScenarioRun<_>.New {state with Results = (WarningMessage warning)::state.Results} (Some result)
-    static member ErrorMessage          state error         = ScenarioRun<_>.New {state with Results = (ErrorMessage error)::state.Results} None
-    static member ExceptionFailure      state exc           = ScenarioRun<_>.New {state with Results = (ExceptionFailure exc)::state.Results} None
+    static member SuccessWithInfo       state result info   = ScenarioRun<_>.New {state with Results = (InfoMessage info)::state.Results}       <| Some result
+    static member SuccessWithWarning    state result warning= ScenarioRun<_>.New {state with Results = (WarningMessage warning)::state.Results} <| Some result
+    static member ExpectFailure         state result failure= ScenarioRun<_>.New {state with Results = (ExpectFailure failure)::state.Results}  <| Some result
+    static member AssertFailure         state failure       = ScenarioRun<_>.New {state with Results = (AssertFailure failure)::state.Results}  <| None
+    static member ErrorMessage          state error         = ScenarioRun<_>.New {state with Results = (ErrorMessage error)::state.Results}     <| None
+    static member ExceptionFailure      state exc           = ScenarioRun<_>.New {state with Results = (ExceptionFailure exc)::state.Results}   <| None
 
 type Scenario<'T> = 
     {
@@ -246,6 +250,23 @@ module Scenario =
         let ss = ScenarioState.New p [] []
         let run = s.Run ss
         run
+
+    let ExpectEqual expected actual = 
+        Scenario<_>.New <| (fun ss ->   
+            if expected = actual then
+                ScenarioRun<_>.Success ss true 
+            else
+                ScenarioRun<_>.ExpectFailure ss false <| sprintf "Expected: %A = %A" expected actual
+            )
+
+    let AssertEqual expected actual = 
+        Scenario<_>.New <| (fun ss ->   
+            if expected = actual then
+                ScenarioRun<_>.Success ss true 
+            else
+                ScenarioRun<_>.AssertFailure ss <| sprintf "Expected: %A = %A" expected actual
+            )
+
 
 [<AutoOpen>]
 module ScenarioBuilder =

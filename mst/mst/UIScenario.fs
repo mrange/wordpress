@@ -59,6 +59,20 @@ module UIScenario =
                 return elem
         }
 
+    let FailIfFound (q : Query) : Scenario<unit> =     
+        scenario {
+            let! element = FindElement q
+            let elem = 
+                match element with
+                | Some c    -> c
+                | _         -> null 
+                    
+            if elem = null then
+                return ()
+            else
+                return! Scenario.Raise (sprintf "Element found: %A" q)
+        }
+
     let GetRootElement : Scenario<AutomationElement> = 
         scenario {
             return! Scenario.GetVariable State_Window
@@ -197,5 +211,9 @@ module UIScenario =
 
             let! pid = ProcessScenario.StartProcess exePath
             do! Scenario.Retry 10 500 (SetRootElement <| ByProcessId pid)
+
+            let! _ = ProcessScenario.WaitUntilIdle 
+
+            return ()
         }
     

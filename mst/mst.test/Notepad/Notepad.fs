@@ -10,16 +10,25 @@
 // You must not remove this notice, or any other, from this software.
 // ----------------------------------------------------------------------------------------------
 
+namespace mst.test
+
 open mst
-open mst.test
 
-[<EntryPoint>]
-let main argv = 
-    let run = Scenario.RunScenario Map.empty <| MSPaintScenarios.DrawShape
-    //let run = Scenario.RunScenario Map.empty <| NotepadScenarios.SimpleScenario
+module Notepad = 
 
-    printfn "Printing results (no results implies success):"
-    for result in run.State.Results do
-        printfn "%A" result
+    let StartNotepad = UIScenario.StartWindowedProcess "notepad.exe"
 
-    0
+    let TextAreaQuery   = ById "15"
+
+    let ReadText: Scenario<string> =
+        scenario {
+            let! text = UIScenario.GetText TextAreaQuery
+            return text
+        }
+
+    let TypeText text : Scenario<unit> =
+        scenario {
+            do! UIScenario.FocusElement TextAreaQuery
+            do! UIScenario.SendText text
+        }
+

@@ -49,11 +49,14 @@
     <Reference Include="WindowsBase" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="MSPaint/Turtle.fs" />
-    <Compile Include="MSPaint/LSystem.fs" />
-    <Compile Include="MSPaint/Fractals.fs" />
-    <Compile Include="MSPaint/MSPaint.fs" />
-    <Compile Include="Program.fs" />
+      <Compile Include="Common/Windows.fs" />
+      <Compile Include="MSPaint/Turtle.fs" />
+      <Compile Include="MSPaint/Fractals.fs" />
+      <Compile Include="MSPaint/MSPaint.fs" />
+      <Compile Include="MSPaint/MSPaintScenarios.fs" />
+      <Compile Include="Notepad/Notepad.fs" />
+      <Compile Include="Notepad/NotepadScenarios.fs" />
+      <Compile Include="Program.fs" />
     <None Include="App.config" />
   </ItemGroup>
   <ItemGroup>
