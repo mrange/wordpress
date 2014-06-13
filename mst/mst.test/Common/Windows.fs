@@ -17,29 +17,32 @@ open mst.lowlevel
 
 open System.Windows
 
+open Scenario
+open UIScenario
+
 module Windows = 
 
-    let WaitForUI = Scenario.Retry 5 100
+    let WaitForUI = Retry 5 100
 
     let DoNotSaveChanges : Scenario<unit> = 
         scenario {
-            do! WaitForUI (UIScenario.FocusElement <| ByName "Notepad")
-            do! UIScenario.SendChar 'n' Modifier.LeftAlt
+            do! WaitForUI (FocusElement <| ByName "Notepad")
+            do! SendChar 'n' Modifier.LeftAlt
         }
 
 
     let ConfirmSaveAs : Scenario<unit> = 
         scenario {
-            do! WaitForUI (UIScenario.FocusElement <| ByName "Confirm Save As")
-            do! UIScenario.SendChar 'y' Modifier.LeftAlt
+            do! WaitForUI (FocusElement <| ByName "Confirm Save As")
+            do! SendChar 'y' Modifier.LeftAlt
         }
 
     let NewFile : Scenario<unit> = 
         scenario {
-            do! UIScenario.SendChar 'f' Modifier.LeftAlt
-            do! UIScenario.SendChar 'n' Modifier.None
+            do! SendChar 'f' Modifier.LeftAlt
+            do! SendChar 'n' Modifier.None
 
-            let! _ = Scenario.Optional DoNotSaveChanges
+            let! _ = Optional DoNotSaveChanges
 
             return ()
         }
@@ -47,19 +50,19 @@ module Windows =
     let OpenFile fileName : Scenario<unit> = 
         let OpenQuery = ByName "Open"
         scenario {
-            do! UIScenario.SendChar 'f' Modifier.LeftAlt
-            do! UIScenario.SendChar 'o' Modifier.None
+            do! SendChar 'f' Modifier.LeftAlt
+            do! SendChar 'o' Modifier.None
 
-            let! _ = Scenario.Optional DoNotSaveChanges
+            let! _ = Optional DoNotSaveChanges
 
-            do! WaitForUI (UIScenario.SetCurrentElement OpenQuery)
+            do! WaitForUI (SetCurrentElement OpenQuery)
 
-            do! UIScenario.SendChar 'n' Modifier.LeftAlt
-            do! UIScenario.SendText fileName
+            do! SendChar 'n' Modifier.LeftAlt
+            do! SendText fileName
 
-            do! UIScenario.SendChar 'o' Modifier.LeftAlt
+            do! SendChar 'o' Modifier.LeftAlt
 
-            do! WaitForUI (UIScenario.FailIfFound OpenQuery)
+            do! WaitForUI (FailIfFound OpenQuery)
 
             return ()
         }
@@ -67,19 +70,19 @@ module Windows =
     let SaveFile fileName : Scenario<unit> = 
         let SaveAsQuery = ByName "Save As"
         scenario {
-            do! UIScenario.SendChar 'f' Modifier.LeftAlt
-            do! UIScenario.SendChar 'a' Modifier.None
+            do! SendChar 'f' Modifier.LeftAlt
+            do! SendChar 'a' Modifier.None
 
-            do! WaitForUI (UIScenario.SetCurrentElement SaveAsQuery)
+            do! WaitForUI (SetCurrentElement SaveAsQuery)
 
-            do! UIScenario.SendChar 'n' Modifier.LeftAlt
-            do! UIScenario.SendText fileName
+            do! SendChar 'n' Modifier.LeftAlt
+            do! SendText fileName
 
-            do! UIScenario.SendChar 's' Modifier.LeftAlt
+            do! SendChar 's' Modifier.LeftAlt
 
-            let! _ = Scenario.Optional ConfirmSaveAs
+            let! _ = Optional ConfirmSaveAs
 
-            do! WaitForUI (UIScenario.FailIfFound SaveAsQuery)
+            do! WaitForUI (FailIfFound SaveAsQuery)
 
             return ()
         }

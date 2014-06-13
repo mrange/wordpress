@@ -15,8 +15,8 @@ open mst.test
 
 [<EntryPoint>]
 let main argv = 
-    let run = Scenario.RunScenario Map.empty <| MSPaintScenarios.DrawShape
-    //let run = Scenario.RunScenario Map.empty <| NotepadScenarios.SimpleScenario
+    //let run = Scenario.RunScenario Map.empty <| MSPaintScenarios.DrawShape
+    let run = Scenario.RunScenario Map.empty <| NotepadScenarios.SimpleScenario
 
     printfn "Printing results (no results implies success):"
     for result in run.State.Results do

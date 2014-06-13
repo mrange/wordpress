@@ -39,5 +39,7 @@ module NotepadScenarios =
             let! text = ReadText 
             let! _ = ExpectEqual testdata text
 
+            do! Pause 2000
+
             return ()
         }
