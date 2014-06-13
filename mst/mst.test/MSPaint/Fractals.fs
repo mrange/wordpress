@@ -1,0 +1,173 @@
+﻿// ----------------------------------------------------------------------------------------------
+// Copyright (c) Mårten Rånge.
+// ----------------------------------------------------------------------------------------------
+// This source code is subject to terms and conditions of the Microsoft Public License. A
+// copy of the license can be found in the License.html file at the root of this distribution.
+// If you cannot locate the  Microsoft Public License, please send an email to
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+//  by the terms of the Microsoft Public License.
+// ----------------------------------------------------------------------------------------------
+// You must not remove this notice, or any other, from this software.
+// ----------------------------------------------------------------------------------------------
+
+namespace mst.test
+
+open Turtle
+
+module PlantFractal =
+    
+    let Left = -25.
+    let Right = 25.
+
+    let rec GenerateSubTree n v = 
+        turtle {
+            do! Generate (n - 1) (v / 2.)
+        }
+    and GenerateRotatedSubTree n v a = 
+        turtle {
+            do! Turn a
+            do! GenerateSubTree n v
+        }
+    and GenerateBranch n v = 
+        turtle {
+            do! Turn Right
+            do! Forward v
+            do! GenerateSubTree n v
+        }
+    and Generate n v = 
+        turtle {
+            if n <= 0 then
+                return ()
+            else
+                do! Width <| (1.5 * float n)
+                do! Forward v
+                do! Turn Left
+                do! RunAndReturn <| GenerateSubTree n v
+                do! RunAndReturn <| GenerateRotatedSubTree n v Right
+                do! Turn Right
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v
+                do! Turn Left
+                do! RunAndReturn <| GenerateSubTree n v
+        }
+     
+
+module SierpinskiTriangleFractal = 
+
+    let Left = -120.
+    let Right = 120.
+
+    let rec GenerateSubTree n v =
+
+        turtle {
+            if n <= 0 then
+                do! Forward <| 2. * v
+                return ()
+            else
+                do! GenerateSubTree (n - 1) (v / 2.)
+                do! Turn Left
+                do! Forward v
+                do! Turn Right
+                do! GenerateSubTree (n - 1) (v / 2.)
+                do! Turn Right
+                do! Forward v
+                do! Turn Left
+                do! GenerateSubTree (n - 1) (v / 2.)
+        }
+
+    let  Generate n v =
+
+        turtle {
+               do! Width <| 3.
+               do! GenerateSubTree (n - 1) (v / 2.)
+               do! Turn Left
+               do! Forward v
+               do! Turn Left
+               do! Forward v
+        }
+
+
+module TreeFractal =
+    
+    let Left    = -90.
+    let Right   = 120.
+
+    let Scaling = 1.5
+
+
+    let rec GenerateBranch n v a = 
+        turtle {
+            do! Turn (a / (float n))
+            do! Forward v
+            do! Generate (n - 1) (v / Scaling)
+        }
+    and Generate n v = 
+        turtle {
+            if n <= 0 then
+                return ()
+            else
+                do! Width <| (1.5 * float n)
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v Right
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v Left
+                do! GenerateBranch n v Right
+
+        }
+     
+
+module OtherTreeFractal =
+    
+    let Left    = -120.
+    let Right   = 120.
+
+    let Scaling = 1.2
+
+
+    let rec GenerateBranch n v a = 
+        turtle {
+            do! Turn (a / (float n))
+            do! Generate (n - 1) (v / Scaling)
+        }
+    and Generate n v = 
+        turtle {
+            if n <= 0 then
+                return ()
+            else
+                do! Width <| (1.5 * float n)
+                do! Forward v
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v Right
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v Left
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n (v / Scaling) Right
+                do! RunAndReturn <| GenerateBranch n (v / Scaling) Left
+
+        }
+     
+
+module AnotherTreeFractal =
+    
+    let Left    = -45.
+    let Right   = 45.
+
+    let Scaling = 1.5
+
+
+    let rec GenerateBranch n v a = 
+        turtle {
+            do! Turn a
+            do! Generate (n - 1) (v / Scaling)
+        }
+    and Generate n v = 
+        turtle {
+            if n <= 0 then
+                return ()
+            else
+                do! Forward v
+                do! RunAndReturn <| GenerateBranch n v Right
+                do! RunAndReturn <| GenerateBranch n v Left
+        }
+     
+

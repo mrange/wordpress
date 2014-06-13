@@ -1,0 +1,201 @@
+﻿// ----------------------------------------------------------------------------------------------
+// Copyright (c) Mårten Rånge.
+// ----------------------------------------------------------------------------------------------
+// This source code is subject to terms and conditions of the Microsoft Public License. A
+// copy of the license can be found in the License.html file at the root of this distribution.
+// If you cannot locate the  Microsoft Public License, please send an email to
+// dlr@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
+//  by the terms of the Microsoft Public License.
+// ----------------------------------------------------------------------------------------------
+// You must not remove this notice, or any other, from this software.
+// ----------------------------------------------------------------------------------------------
+
+// mst - Monadic Scenario Test
+namespace mst
+
+open System
+open System.Windows.Automation
+open System.Windows
+
+open mst.lowlevel
+
+type MouseGesture =
+    |   LeftClick           of Point
+    |   LeftClickAndHold    of Point
+    |   ReleaseLeft         of Point
+    |   MoveTo              of Point
+
+module UIScenario =
+    
+    let State_Window    = "UISCENARIO_STATE_WINDOW"
+    let State_Current   = "UISCENARIO_STATE_CURRENT"
+
+    let GetCurrentElement : Scenario<AutomationElement> = 
+        scenario {
+            return! Scenario.GetVariable State_Current
+        }
+
+    let FindElement (q : Query) : Scenario<AutomationElement option> =     
+        scenario {
+            let! currentElement = GetCurrentElement
+            let element = currentElement |> DeepFindChild q 
+            if element = null then
+                return None
+            else
+                return Some element                        
+        }
+
+    let GetElement (q : Query) : Scenario<AutomationElement> =     
+        scenario {
+            let! element = FindElement q
+            let elem = 
+                match element with
+                | Some c    -> c
+                | _         -> null 
+                    
+            if elem = null then
+                return! Scenario.Raise (sprintf "Element not found: %A" q)
+            else
+                return elem
+        }
+
+    let GetRootElement : Scenario<AutomationElement> = 
+        scenario {
+            return! Scenario.GetVariable State_Window
+        }
+
+    let FocusElement (q : Query) : Scenario<unit> =     
+        scenario {
+            let! element = GetElement q
+            return element.SetFocus()
+        }
+
+    let FindPropertyValue (q : Query) (ap : AutomationProperty) : Scenario<'T option> =     
+        scenario {
+            let! element = GetElement q
+            return
+                match element.GetCurrentPropertyValue(ap) with
+                | :? 'T as v    -> Some v
+                | _             -> None
+        }
+
+    let GetPropertyValue (q : Query) (ap : AutomationProperty) : Scenario<'T> =     
+        scenario {
+            let! p = FindPropertyValue q ap
+            if p.IsSome then
+                return p.Value
+            else
+                return! Scenario.Raise (sprintf "Property not found: %A" ap)
+        }
+
+    let GetBounds       (q : Query) : Scenario<Rect>    = GetPropertyValue q AutomationElementIdentifiers.BoundingRectangleProperty
+    let GetName         (q : Query) : Scenario<string>  = GetPropertyValue q AutomationElementIdentifiers.NameProperty
+    let GetClassName    (q : Query) : Scenario<string>  = GetPropertyValue q AutomationElementIdentifiers.ClassNameProperty
+
+    let GetPattern (q : Query) (p : AutomationPattern) : Scenario<#BasePattern> =     
+        scenario {
+            let! element = GetElement q
+            let o = ref DefaultOf<obj>
+            if element.TryGetCurrentPattern(p, o) then
+                return downcast !o
+            else
+                return! Scenario.Raise (sprintf "Element with requested pattern not found: %A" q)
+        }
+
+    let GetInvokePattern (q : Query) : Scenario<InvokePattern> = GetPattern q InvokePattern.Pattern    
+
+    let GetTextPattern (q : Query) : Scenario<TextPattern> = GetPattern q TextPattern.Pattern        
+
+    let Invoke (q : Query) : Scenario<unit> =     
+        scenario {
+            let! pattern = GetInvokePattern q
+            ignore <| pattern.Invoke()
+            return ()
+        }
+
+    let GetText (q : Query) : Scenario<string> =     
+        scenario {
+            let! pattern = GetTextPattern q
+            return pattern.DocumentRange.GetText(-1)
+        }
+
+    let SetText (s : string) (q : Query) : Scenario<unit> =
+        scenario {
+            do! FocusElement q            
+            let! tp = GetTextPattern (q : Query)
+
+            tp.DocumentRange.Select()
+
+            ignore <| Keyboard.Send (s)
+                    
+            return ()
+        }
+
+    let SendText (s : string) : Scenario<unit> =
+        scenario {
+            ignore <| Keyboard.Send (s)
+                    
+            return ()
+        }
+
+    let SendChar (ch : char) (m : Modifier) : Scenario<unit> =
+        scenario {
+            ignore <| Keyboard.Send (ch, m)
+                    
+            return ()
+        }
+
+    let DoMouseGesture (gs : MouseGesture list) : Scenario<unit> =
+        let round (v : float) = int <| Math.Round(v)
+        let apply (gestures : MouseGesture list) = 
+            let mutable p       = Point()
+            let mutable left    = false
+
+            for g in gestures do
+                match g with
+                | LeftClick pp          ->  left <- false
+                                            p <- pp
+                                            ignore <| Mouse.LeftClick(round p.X, round p.Y)
+                | LeftClickAndHold pp   ->  left <- true
+                                            p <- pp
+                                            ignore <| Mouse.LeftClickAndHold(round p.X, round p.Y)
+                | ReleaseLeft pp        ->  left <- false
+                                            p <- pp
+                                            ignore <| Mouse.ReleaseLeft(round p.X, round p.Y)
+                | MoveTo pp             ->  p <- pp
+                                            ignore <| Mouse.MoveTo(round p.X, round p.Y)
+
+            if (left) then ignore <| Mouse.ReleaseLeft(round p.X, round p.Y)
+        scenario {
+            return apply gs
+        }
+
+    let SetRootElement (q : Query) : Scenario<unit> =
+        scenario {
+            do! Scenario.LiftStackFrame
+
+            let root = AutomationElement.RootElement |> ShallowFindChild q
+            if root = null then
+                do! Scenario.Raise (sprintf "RootElement not found: %A" q)
+            else
+                root.SetFocus();
+                do! Scenario.SetVariable State_Window root
+                do! Scenario.SetVariable State_Current root
+        }
+
+    let SetCurrentElement (q : Query) : Scenario<unit> =     
+        scenario {
+            do! Scenario.LiftStackFrame
+
+            let! element = GetElement q
+            do! Scenario.SetVariable State_Current element
+        }
+
+    let StartWindowedProcess exePath = 
+        scenario {
+            do! Scenario.LiftStackFrame
+
+            let! pid = ProcessScenario.StartProcess exePath
+            do! Scenario.Retry 10 500 (SetRootElement <| ByProcessId pid)
+        }
+    

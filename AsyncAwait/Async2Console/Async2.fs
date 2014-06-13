@@ -182,7 +182,7 @@ type Async2Context(threadId : int, threadName : string) as this =
                 let waitHandles =
                     cs
                     |> Array.map (fun kv -> let (wh, _) = kv.Value in wh)
-                let result = WaitHandle.WaitAny waitHandles
+                let result  = WaitHandle.WaitAny waitHandles
                 let kv      = cs.[result]
                 let wh, a   = kv.Value
                 a (kv.Key, None)
