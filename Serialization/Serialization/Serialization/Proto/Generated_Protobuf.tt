@@ -1,0 +1,196 @@
+﻿using System;
+
+<#
+
+    var types = new []
+        {
+            //  Name          .NET        .proto              Converter   IsPrimary
+            TD ("Int32"     , "Int32"   , "Varint"          , CAST      , false ),
+            TD ("Int64"     , "Int64"   , "Varint"          , CAST      , false ),
+            TD ("UInt32"    , "UInt32"  , "Varint"          , CAST      , true  ),
+            TD ("UInt64"    , "UInt64"  , "Varint"          , CAST      , true  ),
+            TD ("SInt32"    , "Int32"   , "Varint"          , ZZ32      , true  ),
+            TD ("SInt64"    , "Int64"   , "Varint"          , ZZ64      , true  ),
+            TD ("Bool"      , "bool"    , "Varint"          , CONVERT   , true  ),
+            TD ("Enum"      , "Int32"   , "Varint"          , CAST      , false ),
+            TD ("Fixed64"   , "UInt64"  , "64bit"           , CAST      , false ),
+            TD ("SFixed64"  , "Int64"   , "64bit"           , ZZ64      , false ),
+            TD ("Double"    , "Double"  , "64bit"           , CONVERT   , true  ),
+            TD ("String"    , "String"  , "LengthDelimited" , CONVERT   , true  ),
+            TD ("Bytes"     , "Byte[]"  , "LengthDelimited" , CONVERT   , true  ),
+            TD ("Fixed32"   , "UInt32"  , "32bit"           , CAST      , false ),
+            TD ("SFixed32"  , "Int32"   , "32bit"           , ZZ32      , false ),
+            TD ("Float"     , "Single"  , "32bit"           , CONVERT   , true  ),
+        };
+
+#>
+
+namespace Serialization
+{
+    static partial class ProtobufTypes
+    {
+<#
+    foreach (var type in types)
+    {
+#>
+
+<#
+    if (type.IsPrimary)
+    {
+#>
+        public static bool Read (this ByteInputStream stream, byte type, out <#=type.Type#> v)
+        {
+            return stream.Read<#=type.Name#> (type, out v);
+        }
+
+        public static void Write (this ByteOutputStream stream, UInt64 tag, <#=type.Type#> v)
+        {
+            stream.Write<#=type.Name#> (tag, v);
+        }
+<#
+    }
+#>
+
+        public static bool Read<#=type.Name#> (this ByteInputStream stream, byte type, out <#=type.Type#> v)
+        {
+            v = default (<#=type.Type#>);
+
+            if (type != <#=type.WireTypeTag#>)
+            {
+                stream.SkipValue (type);
+                return false;
+            }
+
+            <#=type.WireType#> wv = default (<#=type.WireType#>);
+
+            if (!stream.Read<#=type.WireName#> (ref wv))
+            {
+                return false;
+            }
+
+<#
+    switch (type.Converter)
+    {
+        case CONVERT:
+#>
+            Convert (wv, ref v);
+<#
+            break;
+        case ZZ32: 
+        case ZZ64: 
+#>
+            var xx = wv;
+            var yy = xx >> 1;
+            var ww = (xx & 0x1) == 0 ? yy : ~yy;
+
+            v = (<#=type.Type#>) ww;
+<#
+            break;
+        default:
+        case CAST: 
+#>
+            v = (<#=type.Type#>) wv;
+<#
+            break;
+    }
+#>
+
+            return true;
+            
+        }
+
+        public static void Write<#=type.Name#> (this ByteOutputStream stream, UInt64 tag, <#=type.Type#> v)
+        {
+            stream.WriteKey (tag, <#=type.WireTypeTag#>);
+<#
+    switch (type.Converter)
+    {
+        case CONVERT:
+#>
+            var wv = default (<#=type.WireType#>);
+            Convert (v, ref wv);
+<#
+            break;
+        case ZZ32: 
+#>
+            var xx = (<#=type.WireType#>)v;
+            var yy = xx << 1;
+            var wv = (xx & 0x80000000U) == 0 ? yy : ~yy;
+<#
+            break;
+        case ZZ64: 
+#>
+            var xx = (<#=type.WireType#>)v;
+            var yy = xx << 1;
+            var wv = (xx & 0x8000000000000000UL) == 0 ? yy : ~yy;
+<#
+            break;
+        default:
+        case CAST: 
+#>
+            <#=type.WireType#> wv = (<#=type.WireType#>)v;
+<#
+        break;
+    }
+#>
+
+            stream.Write<#=type.WireName#> (wv);
+        }
+
+<#
+    }
+#>
+    }
+}
+
+<#+
+
+    const string CAST       = "<<CAST>>";
+    const string CONVERT    = "<<CONVERT>>";
+    const string ZZ32       = "<<ZZ32>>";
+    const string ZZ64       = "<<ZZ64>>";
+
+    readonly static System.Collections.Generic.Dictionary<string,string> WireTypeMapping = new System.Collections.Generic.Dictionary<string,string> ()
+    {
+        { "Varint"          , "UInt64"          },
+        { "64bit"           , "UInt64"          },
+        { "LengthDelimited" , "ByteInputStream" },
+        { "32bit"           , "UInt32"          },
+    };
+    
+    readonly static System.Collections.Generic.Dictionary<string,int> WireTypeTagMapping = new System.Collections.Generic.Dictionary<string,int> ()
+    {
+        { "Varint"          , 0 },
+        { "64bit"           , 1 },
+        { "LengthDelimited" , 2 },
+        { "32bit"           , 5 },
+    };
+
+    class TypeDescriptor
+    {
+        public string Name          ;
+        public string Type          ;
+        public string WireName      ;
+        public string WireType      ;
+        public int    WireTypeTag   ;
+        public string Converter     ;
+        public bool   IsPrimary     ;
+
+        public TypeDescriptor(string name, string type, string wireName, string converter, bool isPrimary)
+        {
+            Name        = name                          ;
+            Type        = type                          ;
+            WireName    = wireName                      ;
+            WireType    = WireTypeMapping[wireName]     ;
+            WireTypeTag = WireTypeTagMapping[wireName]  ;
+            Converter   = converter                     ;
+            IsPrimary   = isPrimary                     ;
+        }
+    }
+
+    static TypeDescriptor TD (string name, string type, string wireName, string converter, bool isPrimary)
+    {
+        return new TypeDescriptor (name, type, wireName, converter, isPrimary);
+    }
+
+#>
