@@ -137,7 +137,7 @@ namespace Serialization
         }
     }
 
-    static partial class ProtobufWireTypes
+    static partial class ProtobufWireTypeSerializers
     {
         public static bool ReadKey (this ByteInputStream stream, out UInt64 tag, out byte type)
         {
@@ -328,7 +328,7 @@ namespace Serialization
 
     }
 
-    static partial class ProtobufTypes
+    static partial class ProtobufTypeSerializers
     {
         [StructLayout (LayoutKind.Explicit)]
         struct DoubleConverter

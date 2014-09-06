@@ -3,7 +3,7 @@
 
 namespace Serialization
 {
-    static partial class ProtobufTypes
+    static partial class ProtobufTypeSerializers
     {
 
 

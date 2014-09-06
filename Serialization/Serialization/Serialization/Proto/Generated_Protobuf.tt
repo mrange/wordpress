@@ -27,7 +27,7 @@
 
 namespace Serialization
 {
-    static partial class ProtobufTypes
+    static partial class ProtobufTypeSerializers
     {
 <#
     foreach (var type in types)
