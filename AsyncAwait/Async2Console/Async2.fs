@@ -225,6 +225,35 @@ module Async2 =
         let ar : IAsyncResult = upcast task
         AwaitWaitHandleAndDo false ar.AsyncWaitHandle <| fun () -> Debug.Assert task.IsCompleted; task.Result
 
+    let AwaitOnTask (task : Task<'T>) : Async2<'T> = 
+        let tryToRun (success, exc, cancel) =             
+            if task.IsCompleted then
+                success task.Result
+                true
+            elif task.IsCanceled then
+                cancel (UserCancelled task)
+                true
+            elif task.IsFaulted then
+                exc task.Exception
+                true
+            else
+                false
+
+        fun (ctx, success, exc, cancel) ->
+            if tryToRun (success, exc, cancel) then ()
+            else
+                let ar : IAsyncResult = upcast task
+                let wh = ar.AsyncWaitHandle
+                ctx.RegisterContinuation wh (fun (i, cro) -> 
+                    ctx.UnregisterWaitHandle i
+                    match cro with
+                    | Some cr   -> cancel cr
+                    | _         -> 
+                        if tryToRun (success, exc, cancel) then ()
+                        else 
+                            cancel (UnrecoverableErrorDetected <| Exception "tryToRun should succeed in this case")
+                    ())
+
     // Awaits async workflow
     //  Checks that the continuation executes on the correct thread
     let AwaitAsync (a : Async<'T>) : Async2<'T> = fun (ctx, comp, exe, canc) ->
