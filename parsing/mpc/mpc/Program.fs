@@ -1,36 +1,49 @@
 ﻿
 // ----------------------------------------------------------------------------
 
-type ParseFailure =
-    | Expected    of string
+type ParseFailureTree =
+    | Empty   
+    | Expected      of string
+    | Group         of ParseFailureTree list
+    | Fork          of ParseFailureTree*ParseFailureTree
     | EndOfStream
 
-type ParseResult<'T> =
-    | Success of 'T*string*int
-    | Failure of (ParseFailure list)*string*int
+let inline Join (left : ParseFailureTree) (right : ParseFailureTree) = 
+    match left, right with
+    | _, Empty      -> left
+    | Empty, _      -> right
+    | _             -> Fork (left,right)
+
+type ParseResult<'T> = ('T option)*ParseFailureTree*string*int
+
+let inline Result v f str pos   : ParseResult<'T>   = (v,f,str,pos)
+let inline Success v f str pos  : ParseResult<'T>   = Result (Some v) f str pos
+let inline Failure f str pos    : ParseResult<_>    = Result None f str pos
+
 
 type Parser<'T> = string*int -> ParseResult<'T>
 
 let Delay f : Parser<'T> = f ()
 
 let Return v : Parser<'T> = 
-    fun (str,pos) ->
-        Success (v,str,pos)
+    fun (str,pos) -> 
+        Success v Empty str pos
 
 let ReturnFrom p : Parser<'T> = p
 
-let FailWith parseFailure : Parser<_> = 
-    fun (str,pos) ->
-        Failure (parseFailure,str,pos)
+let FailWith f : Parser<_> = 
+    fun (str,pos) -> 
+        Failure f str pos
 
-let Bind (t : Parser<'T>) (fu : 'T -> Parser<'U>) =
+let Bind (t : Parser<'T>) (fu : 'T -> Parser<'U>) : Parser<'U> =
     fun (str,pos) ->
-        let tr = t (str,pos)
-        match tr with 
-        | Success (tv,tstr,tpos)   -> 
+        let otv,tf,tstr,tpos = t (str,pos)
+        match otv with 
+        | Some tv   -> 
             let u = fu tv
-            u (tstr, tpos)
-        | Failure (tfs,tstr,tpos) -> Failure (tfs,tstr,tpos)
+            let ouv,uf,ustr,upos = u (tstr, tpos)
+            Result ouv (Join tf uf) ustr upos
+        | _ -> Failure tf tstr tpos
 
 let inline (>>=) t fu = Bind t fu
 
@@ -44,44 +57,16 @@ let parse = ParseBuilder()
 
 let Atom : Parser<char> =
     fun (str,pos) -> 
-        if pos < str.Length then Success (str.[pos],str,pos+1)
-        else Failure ([EndOfStream],str,pos)
+        if pos < str.Length then Success str.[pos] Empty str (pos+1)
+        else Failure EndOfStream str pos
 
-(*
-let TwoAtom : Parser<char*char> = 
-    Atom >>= fun first -> 
-        Atom >>= fun second -> 
-            Return (first,second)
+let EOS : Parser<unit> = 
+    fun (str,pos) -> 
+        if pos >= str.Length then Success () Empty str pos
+        else Failure (Expected "EOS") str pos
 
-let TwoAtom : Parser<char*char> = 
-    parse {
-        let! first  = Atom
-        let! second = Atom
-        return first,second
-    }
-
-let Opt (p : Parser<'T>) : Parser<'T option> = 
-    fun (str,pos) ->
-        let pr = p (str,pos)
-        match pr with
-        | Success (pv,str,pos)  -> Success (Some pv,str,pos)
-        | Failure (fs,str,pos)  -> Success (None,str,pos)
-
-let Many (p : Parser<'T>) : Parser<'T list> = 
-    let rec m op = 
-        parse {
-            let! r = op
-            match r with
-            | Some v -> 
-                let! vs = m op
-                return v::vs
-            | _ -> return []
-        }
-    m (Opt p)
-*)
-
-let Satisfy (expected : string) (test : char->bool) : Parser<char> = 
-    let failure = FailWith ([Expected expected])
+let Satisfy expected (test : char->bool) : Parser<char> = 
+    let failure = FailWith expected
     parse {
         let! ch = Atom
         if test ch then 
@@ -92,7 +77,7 @@ let Satisfy (expected : string) (test : char->bool) : Parser<char> =
 
 let AnyOf (anyOf : string) : Parser<char> = 
     let cs = anyOf.ToCharArray()
-    let failure = FailWith (cs |> Array.map (fun ch -> Expected (ch.ToString())) |> List.ofArray)
+    let failure = FailWith (cs |> Array.map (fun ch -> Expected (ch.ToString())) |> List.ofArray |> Group)
     let set = cs |> Set.ofArray
     parse {
         let! ch = Atom
@@ -113,14 +98,14 @@ let inline (>>?) l r = Map l r
 
 let rec Many (p : Parser<'T>) : Parser<'T list> = 
     fun (str,pos) -> 
-        let pr = p (str,pos)
-        match pr with 
-        | Success (pv,pstr, ppos) -> 
-            let restr = Many p (pstr, ppos)
-            match restr with
-            | Success (restv,reststr,restpos) -> Success (pv::restv,reststr,restpos)
+        let opv,pf,pstr,ppos = p (str,pos)
+        match opv with 
+        | Some pv -> 
+            let orv,rf,rstr,rpos = Many p (pstr, ppos)
+            match orv with
+            | Some rv  -> Success (pv::rv) (Join pf rf) rstr rpos
             | _ -> failwith "Many should always succeed"
-        | _ -> Success ([],str,pos)
+        | _ -> Success [] pf str pos
 
 let Many1 (p : Parser<'T>) : Parser<'T list> = 
     parse {
@@ -132,35 +117,73 @@ let Many1 (p : Parser<'T>) : Parser<'T list> =
 
 let OrElse (left : Parser<'T>) (right : Parser<'T>) : Parser<'T> =
     fun (str,pos) ->
-        let leftr = left (str,pos)
-        match leftr with
-        | Success _ -> leftr
-        | Failure (leftfs,_,_) -> 
-            let rightr = right (str,pos)
-            match rightr with
-            | Success _ -> rightr
-            | Failure (rightfs,_,_) -> Failure (leftfs@rightfs,str,pos)
+        let olr,lf,lstr,lpos = left (str,pos)
+        match olr with
+        | Some lr -> Success lr lf lstr lpos
+        | _ -> 
+            let orr,rf,rstr,rpos = right (str,pos)
+            match orr with
+            | Some rr -> Success rr (Join lf rf) rstr rpos
+            | _ -> Failure (Join lf rf) str pos
 
 let inline (<|>) l r = OrElse l r
 
 let SepBy (term : Parser<'T>) (separator : Parser<'S>) (combine : 'T -> 'S -> 'T -> 'T): Parser<'T> =
     let rec sb acc (str,pos) =
-        let sepr = separator (str, pos)
-        match sepr with
-        | Success (sepv,sepstr,seppos) -> 
-            let nextr = term (sepstr,seppos)
-            match nextr with
-            | Success (nextv,nextstr,nextpos) ->
-                let newacc = combine acc sepv nextv
-                sb newacc (nextstr,nextpos)
-            | _ -> nextr
-        | _ -> Success (acc,str,pos)
+        let osr,sf,sstr,spos = separator (str, pos)
+        match osr with
+        | Some sr ->
+            let onr,nf,nstr,npos = term (sstr,spos)
+            match onr with
+            | Some nr ->
+                let newacc = combine acc sr nr
+                sb newacc (nstr,npos)
+            | _ -> Failure (Join sf nf) nstr npos
+        | _ -> Success acc sf str pos
     parse {
         let! first = term
         return! sb first
     }
 
+type ParseFailure =
+    | WasExpecting  of string
+    | UnexpectedEOS
+
+let Run (parser : Parser<'T>) (str : string) = 
+    let rec collapse acc t = 
+        match t with 
+        | Empty         -> acc
+        | Expected e    -> (WasExpecting e)::acc
+        | EndOfStream   -> UnexpectedEOS::acc
+        | Group g       -> g |> List.fold collapse acc
+        | Fork (l,r)    ->
+            let lacc = collapse acc l
+            let racc = collapse lacc r
+            racc
+    
+    let orv,rf,rstr,rpos = parser (str,0) 
+    match orv with
+    | Some rv -> Some rv,[],rstr,rpos
+    | _ -> 
+        let cf = collapse [] rf
+        let f = cf |> Seq.distinct |> List.ofSeq
+        None,f,rstr,rpos
+
 // ----------------------------------------------------------------------------
+
+(*
+let TwoAtom : Parser<char*char> = 
+    Atom >>= fun first -> 
+        Atom >>= fun second -> 
+            Return (first,second)
+
+let TwoAtom : Parser<char*char> = 
+    parse {
+        let! first  = Atom
+        let! second = Atom
+        return first,second
+    }
+*)
 
 type BinaryOperation =
     | Add
@@ -173,7 +196,7 @@ type AbstractSyntaxTree =
     | Identifier        of string
     | BinaryOperation   of BinaryOperation*AbstractSyntaxTree*AbstractSyntaxTree
 
-let Digit : Parser<char> = Satisfy "digit" System.Char.IsDigit
+let Digit : Parser<char> = Satisfy (Expected "digit") System.Char.IsDigit
 
 let Integer : Parser<AbstractSyntaxTree> = 
     let pdigits = Many1 Digit
@@ -187,8 +210,8 @@ let Integer : Parser<AbstractSyntaxTree> =
     }
 
 let Identifier : Parser<AbstractSyntaxTree> = 
-    let pfirst  = Satisfy "identifier" System.Char.IsLetter
-    let prest   = Many (Satisfy "identifier" System.Char.IsLetterOrDigit)
+    let pfirst  = Satisfy (Expected "letter") System.Char.IsLetter
+    let prest   = Many (Satisfy (Group [Expected "letter";Expected "digit"]) System.Char.IsLetterOrDigit)
     parse {
         let! first  = pfirst
         let! rest   = prest
@@ -219,10 +242,12 @@ let MultiplyOrDivideExpr : Parser<AbstractSyntaxTree> = SepBy Term MultiplyOrDiv
 
 let AddOrSubtractExpr : Parser<AbstractSyntaxTree> = SepBy MultiplyOrDivideExpr AddOrSubtract CombineTerms
 
-let Expr = AddOrSubtractExpr
-
-let Run (parser : Parser<'T>) (str : string) : ParseResult<'T> = 
-    parser (str,0) 
+let Expr = 
+    parse {
+        let! expr = AddOrSubtractExpr
+        do! EOS
+        return expr
+    }
 
 // ----------------------------------------------------------------------------
 
