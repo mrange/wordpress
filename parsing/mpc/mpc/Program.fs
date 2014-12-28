@@ -10,6 +10,8 @@
 // ----------------------------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
+// Parser framework
+// ----------------------------------------------------------------------------
 
 type ParseFailureTree =
     | Empty
@@ -18,33 +20,29 @@ type ParseFailureTree =
     | Group         of ParseFailureTree list
     | Fork          of ParseFailureTree*ParseFailureTree
 
-type ParseResult<'T> = ('T option)*ParseFailureTree*string*int
+type ParseResult<'T> = ('T option)*(ParseFailureTree*int)*string*int
 
 type Parser<'T> = string*int -> ParseResult<'T>
 
-let Join (left : ParseFailureTree) (leftPos : int) (right : ParseFailureTree) (rightPos : int) =
+let Join (left : ParseFailureTree, leftPos : int) (right : ParseFailureTree, rightPos : int) =
     match left, right, leftPos < rightPos, rightPos < leftPos with
-    | _     , Empty , false , false -> left
-    | Empty , _     , false , false -> right
-    | _     , _     , false , false -> Fork (left,right)
-    | _     , _     , true , false  -> right
-    | _                             -> left
+    | _     , Empty , false , false -> left,leftPos                 // leftPos = rightPos
+    | Empty , _     , false , false -> right,leftPos                // leftPos = rightPos
+    | _     , _     , false , false -> Fork (left,right),leftPos    // leftPos = rightPos
+    | _     , _     , true , false  -> right,rightPos
+    | _                             -> left,leftPos
 
-let inline Result v f str pos   : ParseResult<'T>   = (v,f,str,pos)
-let inline Success v f str pos  : ParseResult<'T>   = Result (Some v) f str pos
-let inline Failure f str pos    : ParseResult<_>    = Result None f str pos
+let inline Result v f str pos  : ParseResult<'T> = (v,f,str,pos)
+let inline Success v f str pos : ParseResult<'T> = Result (Some v) f str pos
+let inline Failure f str pos   : ParseResult<_>  = Result None f str pos
 
 let Delay f : Parser<'T> = f ()
 
 let Return v : Parser<'T> =
     fun (str,pos) ->
-        Success v Empty str pos
+        Success v (Empty,pos) str pos
 
 let ReturnFrom p : Parser<'T> = p
-
-let FailWith f : Parser<_> =
-    fun (str,pos) ->
-        Failure f str pos
 
 let Bind (t : Parser<'T>) (fu : 'T -> Parser<'U>) : Parser<'U> =
     fun (str,pos) ->
@@ -53,7 +51,7 @@ let Bind (t : Parser<'T>) (fu : 'T -> Parser<'U>) : Parser<'U> =
         | Some tv   ->
             let u = fu tv
             let ouv,uf,ustr,upos = u (tstr, tpos)
-            Result ouv (Join tf pos uf tpos) ustr upos
+            Result ouv (Join tf uf) ustr upos
         | _ -> Failure tf tstr tpos
 
 let inline (>>=) t fu = Bind t fu
@@ -68,45 +66,36 @@ let parse = ParseBuilder()
 
 let Atom : Parser<char> =
     fun (str,pos) ->
-        if pos < str.Length then Success str.[pos] Empty str (pos+1)
-        else Failure (NotExpected "EOS") str pos
+        if pos < str.Length then Success str.[pos] (Empty,pos) str (pos+1)
+        else Failure (NotExpected "EOS",pos) str pos
 
 let EOS : Parser<unit> =
     fun (str,pos) ->
-        if pos >= str.Length then Success () Empty str pos
-        else Failure (Expected "EOS") str pos
+        if pos >= str.Length then Success () (Empty,pos) str pos
+        else Failure (Expected "EOS",pos) str pos
 
 let Satisfy (expected : ParseFailureTree) (test : char->bool) : Parser<char> =
-    let failure = FailWith expected
-    parse {
-        let! ch = Atom
-        if test ch then
-            return ch
-        else
-            return! failure
-    }
+    fun (str,pos) ->
+        if pos < str.Length then
+            let ch = str.[pos]
+            if test ch then Success str.[pos] (Empty,pos) str (pos+1)
+            else Failure (expected,pos) str pos
+        else Failure (NotExpected "EOS",pos) str pos
 
-let IsChar (test : char) : Parser<unit> =
-    let failure = FailWith (Expected (test.ToString()))
+let IsChar (ch : char) : Parser<unit> =
+    let test c      = ch = c
+    let expected    = Expected (ch.ToString())
     parse {
-        let! ch = Atom
-        if test = ch then
-            return ()
-        else
-            return! failure
+        let! _ = Satisfy expected test
+        return ()
     }
 
 let IsAnyOf (anyOf : string) : Parser<char> =
-    let cs = anyOf.ToCharArray()
-    let failure = FailWith (cs |> Array.map (fun ch -> Expected (ch.ToString())) |> List.ofArray |> Group)
-    let set = cs |> Set.ofArray
-    parse {
-        let! ch = Atom
-        if set.Contains ch then
-            return ch
-        else
-            return! failure
-    }
+    let cs          = anyOf.ToCharArray()
+    let expected    = cs |> Array.map (fun ch -> Expected (ch.ToString())) |> List.ofArray |> Group
+    let set         = cs |> Set.ofArray
+    let test c      = set.Contains c
+    Satisfy expected test
 
 let Map (p : Parser<'T>) (map : 'T -> 'U) : Parser<'U> =
     parse {
@@ -130,7 +119,7 @@ let rec Many (p : Parser<'T>) : Parser<'T list> =
         | Some pv ->
             let orv,rf,rstr,rpos = Many p (pstr, ppos)
             match orv with
-            | Some rv  -> Success (pv::rv) (Join pf pos rf ppos) rstr rpos
+            | Some rv  -> Success (pv::rv) (Join pf rf) rstr rpos
             | _ -> failwith "Many should always succeed"
         | _ -> Success [] pf str pos
 
@@ -145,7 +134,7 @@ let OrElse (left : Parser<'T>) (right : Parser<'T>) : Parser<'T> =
     fun (str,pos) ->
         let olr,lf,lstr,lpos = left (str,pos)
         let orr,rf,rstr,rpos = right (str,pos)
-        let jf = Join lf pos rf pos
+        let jf = Join lf rf
         match olr, orr with
         | Some lr   , _         -> Success lr jf lstr lpos
         | _         , Some rr   -> Success rr jf rstr rpos
@@ -163,7 +152,7 @@ let SepBy (term : Parser<'T>) (separator : Parser<'S>) (combine : 'T -> 'S -> 'T
             | Some nr ->
                 let newacc = combine acc sr nr
                 sb newacc (nstr,npos)
-            | _ -> Failure (Join sf pos nf spos) nstr npos
+            | _ -> Failure (Join sf nf) nstr npos
         | _ -> Success acc sf str pos
     parse {
         let! first = term
@@ -223,15 +212,17 @@ let Run (parser : Parser<'T>) (str : string) =
         ignore <| sb.Append '.'
         sb.ToString ()
 
-    let orv,rf,rstr,rpos = parser (str,0)
+    let orv,(rf, rfpos),rstr,rpos = parser (str,0)
     match orv with
     | Some rv -> Some rv,"Parse successful",[],rstr,rpos
     | _ ->
         let cfs = collapse [] rf
         let dfs = cfs |> Seq.distinct |> List.ofSeq
-        let msg = prettify dfs rstr rpos
+        let msg = prettify dfs rstr rfpos
         None,msg,dfs,rstr,rpos
 
+// ----------------------------------------------------------------------------
+// Parser implementation for syntax like:x+y*(3+y)
 // ----------------------------------------------------------------------------
 
 (*
@@ -351,6 +342,8 @@ let rec Eval (lookup : string -> int) (ast : AbstractSyntaxTree) : int =
 
 
 // ----------------------------------------------------------------------------
+// Main loop and test cases
+// ----------------------------------------------------------------------------
 
 let ColorPrint (cc : System.ConsoleColor) (prelude : string) (str : string) =
     let saved = System.Console.ForegroundColor
@@ -380,15 +373,18 @@ let ParserTests () =
 
     let tests =
         [|
-
-            "1?2"               , None
-            "123+"              , None
             "abc"               , Some <| abc
             "123"               , Some <| 123
             "123+456"           , Some <| 123+456
-            "x?y+3"             , None
             "x+y*3"             , Some <| x+y*3
             "x*(y+3*(z+x))"     , Some <| x*(y+3*(z+x))
+
+            "1?2"               , None
+            "123+"              , None
+            "123+#"             , None
+            "x?y+3"             , None
+            "(x+y}"             , None
+            "x+y)"              , None
         |]
 
     for test, expected in tests do
