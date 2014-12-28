@@ -25,11 +25,12 @@ type ParseResult<'T> = ('T option)*(ParseFailureTree*int)*string*int
 type Parser<'T> = string*int -> ParseResult<'T>
 
 let Join (left : ParseFailureTree, leftPos : int) (right : ParseFailureTree, rightPos : int) =
-    match left, right, leftPos < rightPos, rightPos < leftPos with
-    | _     , Empty , false , false -> left,leftPos                 // leftPos = rightPos
-    | Empty , _     , false , false -> right,leftPos                // leftPos = rightPos
-    | _     , _     , false , false -> Fork (left,right),leftPos    // leftPos = rightPos
-    | _     , _     , true , false  -> right,rightPos
+    let c = leftPos.CompareTo rightPos
+    match left, right, c with
+    | _     , Empty , 0             -> left,leftPos
+    | Empty , _     , 0             -> right,leftPos
+    | _     , _     , 0             -> Fork (left,right),leftPos
+    | _     , _     , _ when c < 0  -> right,rightPos
     | _                             -> left,leftPos
 
 let inline Result v f str pos  : ParseResult<'T> = (v,f,str,pos)
@@ -61,31 +62,32 @@ type ParseBuilder() =
 
 let parse = ParseBuilder()
 
-let Atom : Parser<char> =
+let NotExpected_EOS = NotExpected   "EOS"
+let Expected_EOS    = Expected      "EOS"
+
+let Item : Parser<char> =
     fun (str,pos) ->
         if pos < str.Length then Success str.[pos] (Empty,pos) str (pos+1)
-        else Failure (NotExpected "EOS",pos) str pos
+        else Failure (NotExpected_EOS,pos) str pos
 
 let EOS : Parser<unit> =
     fun (str,pos) ->
         if pos >= str.Length then Success () (Empty,pos) str pos
-        else Failure (Expected "EOS",pos) str pos
+        else Failure (Expected_EOS,pos) str pos
 
 let Satisfy (expected : ParseFailureTree) (test : char->bool) : Parser<char> =
+    let e = Group [expected; NotExpected_EOS]
     fun (str,pos) ->
         if pos < str.Length then
             let ch = str.[pos]
             if test ch then Success str.[pos] (Empty,pos) str (pos+1)
             else Failure (expected,pos) str pos
-        else Failure (NotExpected "EOS",pos) str pos
+        else Failure (e,pos) str pos
 
-let IsChar (ch : char) : Parser<unit> =
+let IsChar (ch : char) : Parser<char> =
     let test c      = ch = c
     let expected    = Expected (ch.ToString())
-    parse {
-        let! _ = Satisfy expected test
-        return ()
-    }
+    Satisfy expected test
 
 let IsAnyOf (anyOf : string) : Parser<char> =
     let cs          = anyOf.ToCharArray()
@@ -224,15 +226,15 @@ let Run (parser : Parser<'T>) (str : string) =
 // ----------------------------------------------------------------------------
 
 (*
-let TwoAtom : Parser<char*char> =
-    Atom >>= fun first ->
+let TwoItem : Parser<char*char> =
+    Item >>= fun first ->
         Atom >>= fun second ->
             Return (first,second)
 
-let TwoAtom : Parser<char*char> =
+let TwoItem : Parser<char*char> =
     parse {
-        let! first  = Atom
-        let! second = Atom
+        let! first  = Item
+        let! second = Item
         return first,second
     }
 *)
@@ -251,6 +253,9 @@ type AbstractSyntaxTree =
     | BinaryOperation   of BinaryOperation*AbstractSyntaxTree*AbstractSyntaxTree
 
 // Define parser
+
+let Expected_Digit      = Expected      "digit"
+let Expected_Letter     = Expected      "letter"
 
 let CharToBinaryOperator ch =
     match ch with
@@ -274,17 +279,17 @@ let MultiplyOrDivide : Parser<BinaryOperation> =
         return CharToBinaryOperator ch
     }
 
-let Digit : Parser<char> = Satisfy (Expected "digit") System.Char.IsDigit
+let Digit : Parser<char> = Satisfy Expected_Digit System.Char.IsDigit
 
 let SubExpr : Parser<AbstractSyntaxTree> ref = ref (Return (Integer 0))
 
 let MatchedParentheses : Parser<AbstractSyntaxTree> =
-    let start   = IsChar '('
-    let stop    = IsChar ')'
+    let pstart  = IsChar '('
+    let pstop   = IsChar ')'
     parse {
-        do! start
+        let! _      = pstart
         let! result = !SubExpr
-        do! stop
+        let! _      = pstop
 
         return result
     }
@@ -301,8 +306,8 @@ let Integer : Parser<AbstractSyntaxTree> =
     }
 
 let Identifier : Parser<AbstractSyntaxTree> =
-    let pfirst  = Satisfy (Expected "letter") System.Char.IsLetter
-    let prest   = Many (Satisfy (Group [Expected "letter";Expected "digit"]) System.Char.IsLetterOrDigit)
+    let pfirst  = Satisfy (Expected_Digit) System.Char.IsLetter
+    let prest   = Many (Satisfy (Group [Expected_Digit;Expected_Letter]) System.Char.IsLetterOrDigit)
     parse {
         let! first  = pfirst
         let! rest   = prest
@@ -386,6 +391,7 @@ let ParserTests () =
             "123+"              , None
             "123+#"             , None
             "x?y+3"             , None
+            "(x+y"              , None
             "(x+y}"             , None
             "x+y)"              , None
         |]
