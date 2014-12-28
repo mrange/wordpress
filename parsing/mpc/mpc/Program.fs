@@ -42,8 +42,6 @@ let Return v : Parser<'T> =
     fun (str,pos) ->
         Success v (Empty,pos) str pos
 
-let ReturnFrom p : Parser<'T> = p
-
 let Bind (t : Parser<'T>) (fu : 'T -> Parser<'U>) : Parser<'U> =
     fun (str,pos) ->
         let otv,tf,tstr,tpos = t (str,pos)
@@ -60,7 +58,6 @@ type ParseBuilder() =
     member x.Delay (f)      = Delay f
     member x.Bind (t,fu)    = Bind t fu
     member x.Return (v)     = Return v
-    member x.ReturnFrom (p) = ReturnFrom p
 
 let parse = ParseBuilder()
 
@@ -155,8 +152,9 @@ let SepBy (term : Parser<'T>) (separator : Parser<'S>) (combine : 'T -> 'S -> 'T
             | _ -> Failure (Join sf nf) nstr npos
         | _ -> Success acc sf str pos
     parse {
-        let! first = term
-        return! sb first
+        let! first  = term
+        let! result = sb first
+        return result
     }
 
 type ParseFailure =
@@ -239,6 +237,8 @@ let TwoAtom : Parser<char*char> =
     }
 *)
 
+// Abstaction Syntax Tree
+
 type BinaryOperation =
     | Add
     | Subtract
@@ -249,6 +249,8 @@ type AbstractSyntaxTree =
     | Integer           of int
     | Identifier        of string
     | BinaryOperation   of BinaryOperation*AbstractSyntaxTree*AbstractSyntaxTree
+
+// Define parser
 
 let CharToBinaryOperator ch =
     match ch with
@@ -379,6 +381,7 @@ let ParserTests () =
             "x+y*3"             , Some <| x+y*3
             "x*(y+3*(z+x))"     , Some <| x*(y+3*(z+x))
 
+            "a?"                , None
             "1?2"               , None
             "123+"              , None
             "123+#"             , None
@@ -402,8 +405,6 @@ let ParserTests () =
             PrintSuccess <| sprintf "Parsing failed for '%s'\nExpected:%i\nMessage:%s" test i message
         | Some ast, None ->
             PrintFailure <| sprintf "Parsing successful but expected to fail for '%s'\nAST:%A" test ast
-
-let IntegerOrIdentifier : Parser<AbstractSyntaxTree> = Identifier <|> Integer
 
 [<EntryPoint>]
 let main argv =
